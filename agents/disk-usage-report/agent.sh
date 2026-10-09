@@ -15,7 +15,11 @@ LOG_FILE="$WCP_DIR/logs/$NAME.log"
 MAX_LOG_LINES=2000
 
 mkdir -p "$WCP_DIR/agents" "$WCP_DIR/logs"
-trap 'ec=$?; echo "{\"ts\":$(date +%s),\"exit_code\":$ec}" > "$WCP_DIR/agents/$NAME.heartbeat"' EXIT
+heartbeat() {
+  local code=$?
+  echo "{\"ts\":$(date +%s),\"exit_code\":$code}" > "$WCP_DIR/agents/$NAME.heartbeat"
+}
+trap heartbeat EXIT
 
 # A second start while one is running does nothing.
 exec 9>"$WCP_DIR/agents/$NAME.lock"
