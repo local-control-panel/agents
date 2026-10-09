@@ -1,0 +1,2 @@
+# The built-in agents assign ec inside a quoted trap string; SC2154 is a false positive there.
+disable=SC2154

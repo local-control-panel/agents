@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wcp-agent: disk-usage-report
-# wcp-agent-version: 1.0.0
+# wcp-agent-version: 1.1.0
 # wcp-agent-description: Once a day, logs how full the root filesystem is and the size of the ten largest sites.
 #
 # Read-only apart from its own log, heartbeat and lock under WCP_DIR. Appends

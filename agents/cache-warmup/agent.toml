@@ -1,0 +1,9 @@
+name = "cache-warmup"
+version = "1.0.0"
+tier = "official"
+script = "agent.sh"
+schedule = "configurable"
+default_schedule = "0 4 * * *"
+min_engine = "0.1.0"
+description = "Pre-warms the full-page cache for every site by crawling its sitemap.xml, falling back to the homepage."
+paths = ["/root/.wcp", "/var/www"]

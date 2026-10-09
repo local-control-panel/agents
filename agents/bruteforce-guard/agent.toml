@@ -1,0 +1,9 @@
+name = "bruteforce-guard"
+version = "2.0.0"
+tier = "official"
+script = "agent.sh"
+schedule = "fixed"
+default_schedule = "* * * * *"
+min_engine = "0.1.0"
+description = "Fail2Ban-style brute-force protection for wp-login and Caddy abuse; the ban list is applied through the engine (ingress.applyBans)."
+paths = ["/root/.wcp"]

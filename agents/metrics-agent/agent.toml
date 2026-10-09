@@ -1,0 +1,9 @@
+name = "metrics-agent"
+version = "1.1.0"
+tier = "official"
+script = "agent.sh"
+schedule = "fixed"
+default_schedule = "* * * * *"
+min_engine = "0.1.0"
+description = "Collects system metrics every minute, rotating into monthly files (3-month retention)."
+paths = ["/root/.wcp"]

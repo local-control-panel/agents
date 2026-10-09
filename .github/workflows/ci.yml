@@ -12,8 +12,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate agent metadata
+      - name: Validate agent metadata and bundled libraries
         run: python3 scripts/check_agents.py
+      - name: Checker tests
+        run: python3 -m unittest discover tests
       - name: ShellCheck
         run: |
           shopt -s globstar nullglob
