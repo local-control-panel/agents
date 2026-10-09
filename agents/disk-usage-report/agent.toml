@@ -1,0 +1,9 @@
+name = "disk-usage-report"
+version = "1.0.0"
+tier = "official"
+script = "agent.sh"
+schedule = "configurable"
+default_schedule = "0 6 * * *"
+min_engine = "0.1.0"
+description = "Once a day, logs how full the root filesystem is and the size of the ten largest sites."
+paths = ["/root/.wcp/agents", "/root/.wcp/logs", "/var/www"]
