@@ -32,6 +32,7 @@ agents/<name>/agent.sh|.py      the script
 lib/wcp_agent_lib.py            shared library (not yet used)
 scripts/build_registry.py       generates registry.json (release workflow only)
 scripts/check_agents.py         validates metadata (runs in CI)
+revoked.json                    [{"name": "...", "version": "x.y.z"}] versions the engine refuses
 ```
 
 `agents/example` is a template. It is never published.

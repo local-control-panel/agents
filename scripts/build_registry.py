@@ -36,12 +36,16 @@ def main(tag: str, commit: str) -> int:
             "schedule": meta["schedule"],
             "defaultSchedule": meta["default_schedule"],
             "minEngine": meta["min_engine"],
+            "script": meta["script"],
             "description": meta["description"],
             "paths": meta["paths"],
             "files": files,
         }
     revoked_file = ROOT / "revoked.json"
     revoked = json.loads(revoked_file.read_text()) if revoked_file.is_file() else []
+    for entry in revoked:
+        # The engine matches an agent name and version exactly.
+        assert set(entry) == {"name", "version"}, f"bad revoked entry: {entry}"
     registry = {
         "schema": 1,
         "release": tag,
