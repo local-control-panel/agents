@@ -1,0 +1,9 @@
+name = "resource-alert"
+version = "1.0.0"
+tier = "official"
+script = "agent.sh"
+schedule = "fixed"
+default_schedule = "*/5 * * * *"
+min_engine = "0.1.0"
+description = "CPU, RAM and disk threshold monitor that writes alerts to /root/.wcp/resource-alerts.jsonl."
+paths = ["/root/.wcp"]

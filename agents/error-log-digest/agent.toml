@@ -1,0 +1,9 @@
+name = "error-log-digest"
+version = "1.0.0"
+tier = "official"
+script = "agent.sh"
+schedule = "configurable"
+default_schedule = "0 8 * * *"
+min_engine = "0.1.0"
+description = "Daily digest of grouped WordPress debug.log entries and Caddy 5xx responses across every site."
+paths = ["/root/.wcp", "/var/www"]

@@ -1,0 +1,9 @@
+name = "backup-restore-drill"
+version = "1.1.0"
+tier = "official"
+script = "agent.sh"
+schedule = "configurable"
+default_schedule = "0 3 * * *"
+min_engine = "0.1.0"
+description = "Restores the latest database backup into a throwaway container and compares it with the immutable snapshot."
+paths = ["/root/.wcp"]

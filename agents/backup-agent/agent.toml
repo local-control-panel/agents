@@ -1,0 +1,9 @@
+name = "backup-agent"
+version = "1.1.1"
+tier = "official"
+script = "agent.sh"
+schedule = "none"
+default_schedule = ""
+min_engine = "0.1.0"
+description = "Database and file backups to S3, B2 or R2 with Slack, Discord or webhook notifications."
+paths = ["/root/.wcp", "/var/www", "/var/lib/wcp-agent"]

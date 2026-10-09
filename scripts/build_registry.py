@@ -35,6 +35,8 @@ def main(tag: str, commit: str) -> int:
             "tier": meta["tier"],
             "schedule": meta["schedule"],
             "defaultSchedule": meta["default_schedule"],
+            "isolation": meta.get("isolation", "cron"),
+            "writablePaths": meta.get("writable_paths", []),
             "minEngine": meta["min_engine"],
             "script": meta["script"],
             "description": meta["description"],
