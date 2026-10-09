@@ -1,0 +1,23 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate agent metadata
+        run: python3 scripts/check_agents.py
+      - name: ShellCheck
+        run: |
+          shopt -s globstar nullglob
+          files=(agents/**/*.sh)
+          if [ ${#files[@]} -gt 0 ]; then shellcheck "${files[@]}"; fi
+      - name: Registry builds
+        run: python3 scripts/build_registry.py ci "$GITHUB_SHA" && python3 -m json.tool registry.json >/dev/null

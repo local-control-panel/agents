@@ -1,0 +1,7 @@
+# Every change needs the owner's review. The workflows and the registry
+# generator decide what gets published, so they are listed explicitly.
+*                          @MrGKanev
+/.github/                  @MrGKanev
+/.github/workflows/        @MrGKanev
+/scripts/                  @MrGKanev
+/lib/                      @MrGKanev

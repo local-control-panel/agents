@@ -1,0 +1,9 @@
+name = "example"
+version = "0.1.0"
+tier = "example"
+script = "agent.sh"
+schedule = "none"
+default_schedule = ""
+min_engine = "0.0.0"
+description = "Template: writes a heartbeat file and nothing else."
+paths = ["/root/.wcp/agents"]
