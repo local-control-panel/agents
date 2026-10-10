@@ -35,6 +35,8 @@ KNOWN_TOOLS = {"wp-cli", "rclone", "docker"}
 IMPLIED_HELPERS = {"heartbeat", "lock", "log"}
 KNOWN_HELPERS = IMPLIED_HELPERS | {"result", "config", "site", "tool", "version"}
 REQUIRES_MAX = 32
+CONFIG_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+CONFIG_KEYS_MAX = 64
 HELPER_CALL = re.compile(
     r"(?:\$OPS\b|\$\{OPS\b|ops-engine|OPS_ENGINE)[^\n]*?\bagent\s+(result|config|site|tool|version)\b"
     r"|[\"']agent[\"'],\s*[\"'](result|config|site|tool|version)[\"']"
@@ -131,6 +133,14 @@ def check_requires(name: str, meta: dict) -> list[str]:
                 or len(set(value)) != len(value)):
             errors.append(f"{name}: {key} must be a list of at most {REQUIRES_MAX} distinct "
                           f"{expected[key]}")
+    keys = meta.get("config_keys")
+    if keys is not None and (
+        not isinstance(keys, list) or len(keys) > CONFIG_KEYS_MAX
+        or not all(isinstance(k, str) and CONFIG_KEY.match(k) for k in keys)
+        or len(set(keys)) != len(keys)
+    ):
+        errors.append(f"{name}: config_keys must be a list of at most {CONFIG_KEYS_MAX} distinct names "
+                      "(letters, digits, '_', not starting with a digit)")
     return errors
 
 

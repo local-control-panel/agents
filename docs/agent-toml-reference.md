@@ -88,13 +88,22 @@ requires_tools = ["rclone"]
 requires_ops = ["site.list"]
 ```
 
+`config_keys` lists the keys the agent reads with `ops-engine agent config get`
+(`[A-Za-z_][A-Za-z0-9_]{0,63}`, at most 64, distinct). The engine does not check
+it; it is published as `configKeys` so a panel can build a settings form, and
+the operator's values reach the agent through `agent.configure`.
+
+```toml
+config_keys = ["WEBHOOK_URL"]
+```
+
 An engine older than the one that checks these fields ignores them, so set
 `min_engine` to the release that does.
 
 ## What the published registry contains
 
 On release, `registry.json` records, per agent: `version`, `tier`, `author`, `schedule`,
-`defaultSchedule`, `minEngine`, `requiresOps`, `requiresHelpers`, `requiresTools`,
+`defaultSchedule`, `minEngine`, `requiresOps`, `requiresHelpers`, `requiresTools`, `configKeys`,
 `script`, `description`, `paths`, the isolation settings when present, and the SHA-256 of every file in the agent's directory.
 It also records the release tag, the commit and the list of revoked
 `{name, version}` pairs. These come straight from the tagged commit and are

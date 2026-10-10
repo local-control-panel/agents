@@ -4,7 +4,7 @@
   wcp_agent.py new NAME [--lang bash|python] [--author NAME] [--description TEXT]
                         [--schedule CRON]   scaffold agents/NAME
   wcp_agent.py check [NAME ...]             validate agent.toml and the script
-  wcp_agent.py run NAME [--dry-run] [--json] [--engine PATH]
+  wcp_agent.py run NAME [--dry-run] [--json] [--engine PATH] [--config KEY=VALUE ...]
                                             run it against a scratch WCP_DIR
   wcp_agent.py list                         the agents in this repository
   wcp_agent.py show NAME                    one agent's manifest as JSON
@@ -16,6 +16,7 @@ import argparse
 import ast
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -230,6 +231,111 @@ def tool_allowed(tool):
         return False
 
 
+def run_agent_op(rest):
+    dry_flag = flag(rest, "--dry-run")
+    timeout = int(option(rest, "--timeout-seconds", "300"))
+    fail = lambda code, message: (print(json.dumps({"protocolVersion": 1, "operation": "agent.run", "ok": False,
+                                                    "result": None, "warnings": [],
+                                                    "error": {"code": code, "message": message}},
+                                                   separators=(",", ":"))), sys.exit(1))
+    name = rest[0] if rest else ""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name):
+        fail("INVALID_INPUT", "agent name must be lowercase letters, digits and '-' (at most 64)")
+    if not 1 <= timeout <= 3600:
+        fail("INVALID_INPUT", "timeout must be between 1 and 3600 seconds")
+    try:
+        installed = name in json.load(open(os.path.join(wcp, "agents", "manifest.json")))
+    except (OSError, ValueError, TypeError):
+        installed = False
+    script = os.path.join(wcp, "agents", name + ".sh")
+    if not installed or not os.path.exists(script):
+        fail("NOT_FOUND", "this agent is not installed")
+    info = os.stat(script)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        fail("PERMISSION_DENIED", "the installed script is not trusted")
+    probe = os.open(os.path.join(wcp, "agents", name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fail("CONFLICT", "the agent is already running (its lock is held)")
+    os.close(probe)
+    env = dict(os.environ, WCP_DIR=wcp, WCP_DRY_RUN="1" if dry_flag else "0", WCP_LOCK_HELD="")
+    env.setdefault("OPS_ENGINE", sys.argv[0])
+    # Like the cron line the engine writes: a fixed PATH, not the caller's.
+    env["PATH"] = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    started = time.time()
+    timed_out = False
+    try:
+        done = subprocess.run(["bash", script], env=env, capture_output=True, text=True, timeout=timeout)
+        code, out, err = done.returncode, done.stdout, done.stderr
+    except subprocess.TimeoutExpired:
+        code, out, err, timed_out = None, "", "", True
+    beat = result = None
+    if not dry_flag:
+        try:
+            beat = json.load(open(os.path.join(wcp, "agents", name + ".heartbeat")))
+            beat = beat if beat.get("ts", 0) >= int(started) else None
+        except (OSError, ValueError, AttributeError):
+            beat = None
+        try:
+            for line in reversed(open(os.path.join(wcp, "logs", name + ".log")).read().splitlines()):
+                entry = json.loads(line)
+                if "status" in entry and entry.get("ts", 0) >= int(started):
+                    result = entry
+                    break
+        except (OSError, ValueError):
+            pass
+    envelope("agent.run", {"agent": name, "dryRun": dry_flag, "scheduler": "cron", "exitCode": code,
+                           "timedOut": timed_out, "durationMs": int((time.time() - started) * 1000),
+                           "heartbeat": beat, "result": result, "stdout": out[-4096:], "stderr": err[-4096:]})
+
+
+def configure_op(rest):
+    path = option(rest, "--request-file")
+    fail = lambda code, message: (print(json.dumps({"protocolVersion": 1, "operation": "agent.configure",
+                                                    "ok": False, "result": None, "warnings": [],
+                                                    "error": {"code": code, "message": message}},
+                                                   separators=(",", ":"))), sys.exit(1))
+    try:
+        # The real engine also requires the request file to be root-owned.
+        request = json.load(open(path))
+        name, values, merge = request["name"], request["values"], request.get("merge", False)
+        assert set(request) <= {"name", "values", "merge"} and isinstance(values, dict)
+        assert re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name) and len(values) <= 64
+        for key, value in values.items():
+            assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key)
+            assert value is None or (isinstance(value, str) and len(value.encode()) <= 4096
+                                     and not any(c in value for c in "\n\r\0"))
+    except (OSError, ValueError, KeyError, TypeError, AssertionError):
+        fail("INVALID_INPUT", "request-file is not a valid agent.configure request")
+    try:
+        installed = name in json.load(open(os.path.join(wcp, "agents", "manifest.json")))
+    except (OSError, ValueError, TypeError):
+        installed = False
+    if not installed:
+        fail("NOT_FOUND", "this agent is not installed")
+    current = conf_values(name) if merge else {}
+    old = dict(conf_values(name) or {})
+    merged = dict(current or {})
+    for key, value in values.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    text = "# Written by the operations engine (agent.configure). KEY=VALUE, one per line.\n" + "".join(
+        "%s=%s\n" % (key, merged[key]) for key in sorted(merged))
+    target = os.path.join(wcp, "agents", name + ".conf")
+    unchanged = os.path.isfile(target) and open(target).read() == text and (os.stat(target).st_mode & 0o777) == 0o600
+    if not unchanged:
+        temp = target + ".%d.tmp" % os.getpid()
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(temp, target)
+    envelope("agent.configure", {"agent": name, "changed": not unchanged, "keys": sorted(merged),
+                                 "removed": sorted(k for k in old if k not in merged)})
+
+
 def sites():
     manifests = os.environ.get("WCP_SITES_MANIFEST_DIR") or "/etc/operations-engine/sites"
     root = os.environ.get("SITES_ROOT") or "/var/www"
@@ -381,6 +487,10 @@ elif args[:3] in (["agent", "tool", "status"], ["agent", "tool", "ensure"]):
     if as_json:
         envelope("agent.tool.ensure", {"tool": tool, "outcome": outcome, "dryRun": dry,
                                        "allowed": allowed, "state": state})
+elif args[:2] == ["agent", "run"]:
+    run_agent_op(args[2:])
+elif args[:2] == ["agent", "configure"]:
+    configure_op(args[2:])
 elif args[:2] == ["agent", "version"]:
     if "--json" in args:
         envelope("agent.version", {"helperApi": 1, "helpers": HELPERS, "engineVersion": "stub"})
@@ -517,10 +627,13 @@ def cmd_api(_args) -> int:
     return 0
 
 
-def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str = None) -> dict:
+def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str = None,
+              config: dict = None) -> dict:
     """Run agents/<name> the way the engine would, but inside a scratch WCP_DIR
     with a stub engine (or the real binary given as `engine`), then check the
-    contract. Returns a report dict."""
+    contract. `config` (KEY -> value) is written as the agent's own 0600
+    `agents/<name>.conf`, as `ops-engine agent configure` would. Returns a
+    report dict."""
     directory = ROOT / "agents" / name
     errors = check_agents.check(directory)
     if errors:
@@ -538,6 +651,16 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str =
         shutil.copy(directory / meta["script"], installed)
         installed.chmod(0o755)
         shutil.copy(LIB, agents_dir / "wcp_agent_lib.py")
+        # The engine lists an installed agent in manifest.json (`agent run` needs it).
+        (agents_dir / "manifest.json").write_text(json.dumps(
+            {name: {"version": meta["version"], "installed_at": "scratch"}}))
+        if config:
+            for key, value in config.items():
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key) or "\n" in value:
+                    return {"agent": name, "ok": False, "problems": [f"invalid --config entry {key}"]}
+            conf = agents_dir / f"{name}.conf"
+            conf.write_text("".join(f"{k}={v}\n" for k, v in sorted(config.items())))
+            conf.chmod(0o600)
         stub = scratch / "ops-engine"
         if engine:
             stub = Path(engine).resolve()
@@ -597,7 +720,7 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str =
         else:
             problems.append("no lock file created (contract rule 4)")
         files = sorted(str(p.relative_to(scratch)) for p in scratch.rglob("*")
-                       if p.is_file() and p.name not in {"ops-engine", "wcp_agent_lib.py", f"{name}.sh", "flock"})
+                       if p.is_file() and p.name not in {"ops-engine", "wcp_agent_lib.py", f"{name}.sh", "flock", "manifest.json", f"{name}.conf"})
         engine_calls = calls.read_text().splitlines() if calls.exists() else []
         logs = {}
         for log in (scratch / "logs").glob("*.log"):
@@ -624,7 +747,14 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str =
 def cmd_run(args) -> int:
     if not (ROOT / "agents" / args.name).is_dir():
         return fail(f"no agent {args.name}")
-    report = run_agent(args.name, dry_run=args.dry_run, timeout=args.timeout, engine=args.engine)
+    config = {}
+    for item in args.config:
+        key, sep, value = item.partition("=")
+        if not sep:
+            return fail("--config takes KEY=VALUE")
+        config[key] = value
+    report = run_agent(args.name, dry_run=args.dry_run, timeout=args.timeout, engine=args.engine,
+                       config=config)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
@@ -664,6 +794,8 @@ def main(argv=None) -> int:
     run.add_argument("--json", action="store_true")
     run.add_argument("--timeout", type=int, default=60)
     run.add_argument("--engine", help="use this real ops-engine binary instead of the built-in stub")
+    run.add_argument("--config", action="append", default=[], metavar="KEY=VALUE",
+                     help="put this in the agent's own config file (read with `agent config get`); repeatable")
     run.set_defaults(func=cmd_run)
     sub.add_parser("list", help="list agents").set_defaults(func=cmd_list)
     show = sub.add_parser("show", help="print one manifest as JSON")

@@ -360,6 +360,107 @@ class StubEngine(unittest.TestCase):
             self.assertEqual(present["outcome"], "present")
             (self.dir / "bin" / "rclone").unlink()
 
+    def install(self, kind, name, script):
+        agents = self.dir / kind / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        path = agents / f"{name}.sh"
+        path.write_text(script)
+        path.chmod(0o755)
+        manifest = agents / "manifest.json"
+        manifest.write_text(json.dumps({name: {"version": "1.0.0"}}))
+
+    AGENT = ('#!/usr/bin/env bash\necho "dry=$WCP_DRY_RUN held=[${WCP_LOCK_HELD:-}] path=$PATH"\n'
+             'if [ "$WCP_DRY_RUN" != "1" ]; then mkdir -p "$WCP_DIR/logs"\n'
+             'echo "{\\"ts\\":$(date +%s),\\"exit_code\\":0}" > "$WCP_DIR/agents/demo.heartbeat"\n'
+             'echo "{\\"ts\\":$(date +%s),\\"agent\\":\\"demo\\",\\"status\\":\\"ok\\",'
+             '\\"summary\\":\\"fine\\",\\"data\\":{}}" >> "$WCP_DIR/logs/demo.log"; fi\n'
+             'echo oops >&2\nexit ${DEMO_EXIT:-0}\n')
+
+    def test_agent_run_reports_the_run_and_a_dry_run_writes_nothing(self):
+        for kind in self.each():
+            self.install(kind, "demo", self.AGENT)
+            real = json.loads(self.call(kind, "agent", "run", "demo").stdout)["result"]
+            self.assertEqual((real["exitCode"], real["timedOut"], real["dryRun"], real["scheduler"]),
+                             (0, False, False, "cron"))
+            self.assertEqual(real["heartbeat"]["exit_code"], 0)
+            self.assertEqual(real["result"]["status"], "ok")
+            self.assertIn("held=[]", real["stdout"])
+            self.assertIn("path=/usr/local/bin:", real["stdout"])
+            self.assertEqual(real["stderr"], "oops\n")
+            shutil_rmtree = __import__("shutil").rmtree
+            shutil_rmtree(self.dir / kind / "logs")
+            (self.dir / kind / "agents" / "demo.heartbeat").unlink()
+            dry = json.loads(self.call(kind, "agent", "run", "demo", "--dry-run").stdout)["result"]
+            self.assertTrue(dry["dryRun"])
+            self.assertIn("dry=1", dry["stdout"])
+            self.assertIsNone(dry["heartbeat"])
+            self.assertIsNone(dry["result"])
+            self.assertFalse((self.dir / kind / "logs").exists())
+
+    def test_agent_run_refusals(self):
+        for kind in self.each():
+            run = lambda *a: self.call(kind, "agent", "run", *a)  # noqa: E731
+            code = lambda done: json.loads(done.stdout)["error"]["code"]  # noqa: E731
+            self.assertEqual(code(run("missing")), "NOT_FOUND")
+            self.assertEqual(run("../x").returncode, 1)
+            self.install(kind, "demo", self.AGENT)
+            self.assertEqual(code(run("demo", "--timeout-seconds", "0")), "INVALID_INPUT")
+            import fcntl
+            fd = os.open(self.dir / kind / "agents" / "demo.lock", os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                self.assertEqual(code(run("demo")), "CONFLICT")
+            finally:
+                os.close(fd)
+            (self.dir / kind / "agents" / "demo.sh").chmod(0o777)
+            self.assertEqual(code(run("demo")), "PERMISSION_DENIED")
+
+    def test_agent_configure_writes_a_private_file_and_never_echoes_values(self):
+        for kind in self.each():
+            if kind == "real" and os.geteuid() != 0:
+                continue  # the real engine wants a root-owned request file
+            self.install(kind, "demo", self.AGENT)
+            request = self.dir / "request.json"
+            request.write_text(json.dumps({"name": "demo", "values": {"B": "2", "TOKEN": "s3cret"}}))
+            request.chmod(0o600)
+            done = self.call(kind, "agent", "configure", "--request-file", str(request))
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertNotIn("s3cret", done.stdout)
+            result = json.loads(done.stdout)["result"]
+            self.assertEqual((result["changed"], result["keys"]), (True, ["B", "TOKEN"]))
+            conf = self.dir / kind / "agents" / "demo.conf"
+            self.assertEqual(conf.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(self.call(kind, "agent", "config", "get", "demo", "TOKEN").stdout, "s3cret\n")
+            again = json.loads(self.call(kind, "agent", "configure", "--request-file", str(request)).stdout)
+            self.assertFalse(again["result"]["changed"])
+            request.write_text(json.dumps({"name": "demo", "merge": True, "values": {"TOKEN": None, "C": "3"}}))
+            merged = json.loads(self.call(kind, "agent", "configure", "--request-file", str(request)).stdout)
+            self.assertEqual((merged["result"]["keys"], merged["result"]["removed"]), (["B", "C"], ["TOKEN"]))
+
+    def test_runner_config_reaches_config_get(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        (root / "agents" / "reader").mkdir(parents=True)
+        (root / "agents" / "reader" / "agent.toml").write_text(
+            'name = "reader"\nversion = "0.1.0"\ntier = "community"\nauthor = "T"\nscript = "agent.sh"\n'
+            'schedule = "none"\ndefault_schedule = ""\nmin_engine = "0.0.0"\ndescription = "d"\n'
+            'paths = ["/root/.wcp/agents", "/root/.wcp/logs"]\nrequires_helpers = ["config", "result"]\n')
+        (root / "agents" / "reader" / "agent.sh").write_text(
+            '#!/usr/bin/env bash\n# wcp-agent: reader\n# wcp-agent-version: 0.1.0\n'
+            'set -euo pipefail\nNAME=reader\nOPS="${OPS_ENGINE:-/usr/local/bin/ops-engine}"\n'
+            'trap \'"$OPS" agent heartbeat "$NAME" --exit-code $?\' EXIT\n'
+            '[ "${WCP_LOCK_HELD:-}" = "$NAME" ] || exec "$OPS" agent lock "$NAME" -- bash "$0" "$@"\n'
+            'url=$("$OPS" agent config get "$NAME" WEBHOOK_URL --default none)\n'
+            '"$OPS" agent result emit "$NAME" --status ok --summary "url=$url"\n')
+        with mock.patch.object(wcp_agent, "ROOT", root), contextlib.redirect_stdout(io.StringIO()):
+            without = wcp_agent.run_agent("reader")
+            with_config = wcp_agent.run_agent("reader", config={"WEBHOOK_URL": "https://h.example"})
+            bad = wcp_agent.run_agent("reader", config={"bad-key": "x"})
+        self.assertTrue(without["ok"], without)
+        self.assertEqual(without["result"]["summary"], "url=none")
+        self.assertEqual(with_config["result"]["summary"], "url=https://h.example")
+        self.assertFalse(bad["ok"])
+
     def test_the_scaffold_result_line_reaches_the_report(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(__import__("shutil").rmtree, root, True)
@@ -391,6 +492,13 @@ class Requirements(unittest.TestCase):
             errors = check_agents.check_requires("demo", dict(self.META, **{key: value}))
             self.assertEqual(len(errors), 1, (key, value))
             self.assertIn(key, errors[0])
+
+    def test_config_keys_are_validated(self):
+        ok = dict(self.META, config_keys=["WEBHOOK_URL", "_x1"])
+        self.assertEqual(check_agents.check_requires("demo", ok), [])
+        for bad in ("WEBHOOK_URL", ["a-b"], ["1a"], ["A", "A"], [1], [f"K{i}" for i in range(65)]):
+            errors = check_agents.check_requires("demo", dict(self.META, config_keys=bad))
+            self.assertEqual(len(errors), 1, bad)
 
     def test_a_helper_used_but_not_declared_is_an_error(self):
         text = ('# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n"$OPS" agent result emit "$NAME" --status ok '
