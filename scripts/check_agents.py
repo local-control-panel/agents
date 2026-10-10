@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate every agents/*/agent.toml. Exit 1 on the first problem list."""
+import ast
 import re
 import sys
 import tomllib
@@ -24,6 +25,7 @@ SAFE_PATH = re.compile(r"^/(root/\.wcp|var/log|var/www|var/lib/wcp-agent)(/[A-Za
 # The library is installed as a file next to the scripts; a script reaches it
 # through this path entry, never through an inlined copy.
 LIB_PATH = re.compile(r"^sys\.path\.insert\(0, .*agents.*\)$", re.M)
+LIB_FILE = ROOT / "lib" / "wcp_agent_lib.py"
 REQUIRED = ["name", "version", "tier", "author", "script", "schedule", "default_schedule",
             "min_engine", "description", "paths"]
 
@@ -107,7 +109,42 @@ def check_script(name: str, meta: dict, text: str) -> list[str]:
         errors.append(f"{name}: use 'from wcp_agent_lib import ...'")
     if re.search(r"^from wcp_agent_lib import ", text, re.M) and not LIB_PATH.search(text):
         errors.append(f"{name}: put the agents directory on sys.path before importing wcp_agent_lib")
+    header_name = re.search(r"^# wcp-agent: (\S+)$", text, re.M)
+    if not header_name or header_name.group(1) != meta["name"]:
+        errors.append(f"{name}: '# wcp-agent' must equal name in agent.toml")
+    known = library_names()
+    for imported in re.findall(r"^from wcp_agent_lib import (.+)$", text, re.M):
+        for item in imported.split("#")[0].replace("(", "").replace(")", "").split(","):
+            item = item.strip().split(" as ")[0].strip()
+            if item and known and item not in known:
+                errors.append(f"{name}: wcp_agent_lib has no '{item}'")
     return errors
+
+
+def advise(name: str, text: str) -> list[str]:
+    """Contract points that are not (yet) errors, because some agents already
+    published do not meet them. New agents should."""
+    notes = []
+    if "heartbeat" not in text:
+        notes.append(f"{name}: no heartbeat written on exit (contract rule 3)")
+    if "flock" not in text:
+        notes.append(f"{name}: no lock taken with flock -n (contract rule 4)")
+    return notes
+
+
+def library_names() -> set[str]:
+    """Public names defined at the top level of lib/wcp_agent_lib.py."""
+    try:
+        tree = ast.parse(LIB_FILE.read_text())
+    except (OSError, SyntaxError):
+        return set()
+    names = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return {n for n in names if not n.startswith("_")}
 
 
 def main() -> int:
@@ -115,6 +152,11 @@ def main() -> int:
     for directory in sorted((ROOT / "agents").iterdir()):
         if directory.is_dir():
             errors += check(directory)
+    for directory in sorted((ROOT / "agents").iterdir()):
+        script = directory / "agent.sh"
+        if directory.is_dir() and script.is_file():
+            for note in advise(directory.name, script.read_text()):
+                print(f"warning: {note}", file=sys.stderr)
     for error in errors:
         print(error, file=sys.stderr)
     return 1 if errors else 0
