@@ -26,6 +26,19 @@ SAFE_PATH = re.compile(r"^/(root/\.wcp|var/log|var/www|var/lib/wcp-agent)(/[A-Za
 # through this path entry, never through an inlined copy.
 LIB_PATH = re.compile(r"^sys\.path\.insert\(0, .*agents.*\)$", re.M)
 LIB_FILE = ROOT / "lib" / "wcp_agent_lib.py"
+# `requires_*` (docs/agent-api.md section 8). The engine checks them at install.
+# The tool and helper lists mirror what the engine knows; an unknown name could
+# never be satisfied, so it is an error here instead of a refusal on a server.
+REQUIRES_OP = re.compile(r"^[A-Za-z0-9.]{1,64}$")
+KNOWN_TOOLS = {"wp-cli", "rclone", "docker"}
+# The first three are implied by `min_engine`; the others must be listed.
+IMPLIED_HELPERS = {"heartbeat", "lock", "log"}
+KNOWN_HELPERS = IMPLIED_HELPERS | {"result", "config", "site", "tool", "version"}
+REQUIRES_MAX = 32
+HELPER_CALL = re.compile(
+    r"(?:\$OPS\b|\$\{OPS\b|ops-engine|OPS_ENGINE)[^\n]*?\bagent\s+(result|config|site|tool|version)\b"
+    r"|[\"']agent[\"'],\s*[\"'](result|config|site|tool|version)[\"']"
+)
 REQUIRED = ["name", "version", "tier", "author", "script", "schedule", "default_schedule",
             "min_engine", "description", "paths"]
 
@@ -91,9 +104,40 @@ def check(directory: Path) -> list[str]:
             f"{directory.name}: a systemd agent needs writable_paths, a list of absolute "
             "paths below /root/.wcp, /var/log, /var/www or /var/lib/wcp-agent, using only A-Za-z0-9._-"
         )
+    errors += check_requires(directory.name, meta)
     if script.is_file():
         errors += check_script(directory.name, meta, script.read_text())
     return errors
+
+
+def check_requires(name: str, meta: dict) -> list[str]:
+    errors = []
+    rules = {
+        "requires_ops": lambda v: bool(REQUIRES_OP.match(v)),
+        "requires_helpers": lambda v: v in KNOWN_HELPERS,
+        "requires_tools": lambda v: v in KNOWN_TOOLS,
+    }
+    expected = {
+        "requires_ops": "engine operation names such as site.list",
+        "requires_helpers": f"helper groups from {sorted(KNOWN_HELPERS)}",
+        "requires_tools": f"tools from {sorted(KNOWN_TOOLS)}",
+    }
+    for key, valid in rules.items():
+        if key not in meta:
+            continue
+        value = meta[key]
+        if (not isinstance(value, list) or len(value) > REQUIRES_MAX
+                or not all(isinstance(v, str) and valid(v) for v in value)
+                or len(set(value)) != len(value)):
+            errors.append(f"{name}: {key} must be a list of at most {REQUIRES_MAX} distinct "
+                          f"{expected[key]}")
+    return errors
+
+
+def used_helpers(text: str) -> set[str]:
+    """The `ops-engine agent <group>` groups beyond the implied three that the
+    script calls."""
+    return {a or b for a, b in HELPER_CALL.findall(text)}
 
 
 def check_script(name: str, meta: dict, text: str) -> list[str]:
@@ -109,6 +153,11 @@ def check_script(name: str, meta: dict, text: str) -> list[str]:
         errors.append(f"{name}: use 'from wcp_agent_lib import ...'")
     if re.search(r"^from wcp_agent_lib import ", text, re.M) and not LIB_PATH.search(text):
         errors.append(f"{name}: put the agents directory on sys.path before importing wcp_agent_lib")
+    declared = meta.get("requires_helpers", [])
+    if isinstance(declared, list):
+        for group in sorted(used_helpers(text) - set(declared)):
+            errors.append(f"{name}: the script calls 'agent {group}' but requires_helpers does not "
+                          f"list \"{group}\" (the engine checks it at install)")
     header_name = re.search(r"^# wcp-agent: (\S+)$", text, re.M)
     if not header_name or header_name.group(1) != meta["name"]:
         errors.append(f"{name}: '# wcp-agent' must equal name in agent.toml")
