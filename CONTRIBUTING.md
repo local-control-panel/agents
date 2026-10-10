@@ -1,5 +1,6 @@
 # Contributing
 
+0. Read [docs/writing-agents.md](docs/writing-agents.md).
 1. Copy `agents/example` to `agents/<your-name>` and edit `agent.toml`.
 2. Run `python3 scripts/check_agents.py` and `shellcheck` on your script.
 3. Open a pull request. Explain what the agent does and why it needs each path.

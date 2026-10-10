@@ -95,6 +95,11 @@ are linted for obvious mismatches. They are **not a sandbox**.
 - Write `<name>.heartbeat` the way the built-in agents do.
 - Touch nothing outside the declared `paths`.
 
+## Writing an agent
+
+Start with [docs/](docs/README.md): how an agent runs, the `agent.toml` fields,
+the security model and worked examples.
+
 ## Contributing
 
 Open a pull request. An owner must approve every change, including workflows.
