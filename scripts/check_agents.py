@@ -125,10 +125,12 @@ def advise(name: str, text: str) -> list[str]:
     """Contract points that are not (yet) errors, because some agents already
     published do not meet them. New agents should."""
     notes = []
+    # Both the plain form (trap + flock -n) and the engine helpers
+    # (`ops-engine agent heartbeat|lock`, docs/agent-api.md) satisfy the contract.
     if "heartbeat" not in text:
         notes.append(f"{name}: no heartbeat written on exit (contract rule 3)")
-    if "flock" not in text:
-        notes.append(f"{name}: no lock taken with flock -n (contract rule 4)")
+    if "flock" not in text and not re.search(r"agent\s+lock\b", text):
+        notes.append(f"{name}: no lock taken with flock -n or 'ops-engine agent lock' (contract rule 4)")
     return notes
 
 

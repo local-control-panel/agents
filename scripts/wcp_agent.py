@@ -4,10 +4,11 @@
   wcp_agent.py new NAME [--lang bash|python] [--author NAME] [--description TEXT]
                         [--schedule CRON]   scaffold agents/NAME
   wcp_agent.py check [NAME ...]             validate agent.toml and the script
-  wcp_agent.py run NAME [--dry-run] [--json] run it against a scratch WCP_DIR
+  wcp_agent.py run NAME [--dry-run] [--json] [--engine PATH]
+                                            run it against a scratch WCP_DIR
   wcp_agent.py list                         the agents in this repository
   wcp_agent.py show NAME                    one agent's manifest as JSON
-  wcp_agent.py api                          the helpers in lib/wcp_agent_lib.py
+  wcp_agent.py api                          the functions in lib/wcp_agent_lib.py (compat layer)
 
 See docs/agent-api.md.
 """
@@ -29,6 +30,10 @@ import check_agents  # noqa: E402
 
 LIB = ROOT / "lib" / "wcp_agent_lib.py"
 NAME_MAX = 64
+# The first engine release that has `ops-engine agent heartbeat|lock|log`.
+# Scaffolds that call them must not run on an older engine. Set this to the
+# real release number when the engine ships the helpers (docs/agent-api.md).
+HELPERS_MIN_ENGINE = "0.2.0"
 
 TOML = '''name = "{name}"
 version = "0.1.0"
@@ -37,91 +42,139 @@ author = "{author}"
 script = "agent.sh"
 schedule = "{schedule_kind}"
 default_schedule = "{schedule}"
-min_engine = "0.1.0"
+min_engine = "{min_engine}"
 description = "{description}"
 paths = ["/root/.wcp/agents", "/root/.wcp/logs"]
 '''
 
-# Both templates keep the four ingredients of the contract: the heartbeat on
-# every exit, the lock, work inside the declared paths and a bounded log.
+# Both templates keep the contract: the heartbeat on every exit, the lock, work
+# inside the declared paths and a bounded log. The shared parts are engine
+# commands (`ops-engine agent ...`), so Bash and Python agents use the same.
+PROLOGUE = '''set -euo pipefail
+
+NAME="{name}"
+OPS="${{OPS_ENGINE:-/usr/local/bin/ops-engine}}"
+export NAME OPS
+
+# Heartbeat on every exit; then run this script again under the agent's lock.
+# A second start while one is running does nothing and exits 0.
+trap '"$OPS" agent heartbeat "$NAME" --exit-code $?' EXIT
+[ "${{WCP_LOCK_HELD:-}}" = "$NAME" ] || exec "$OPS" agent lock "$NAME" -- bash "$0" "$@"
+'''
+
 BASH = '''#!/usr/bin/env bash
 # wcp-agent: {name}
 # wcp-agent-version: 0.1.0
 # wcp-agent-description: {description}
-set -euo pipefail
-
-NAME="{name}"
-WCP_DIR="${{WCP_DIR:-/root/.wcp}}"
-LOG_FILE="$WCP_DIR/logs/$NAME.log"
-MAX_LINES=2000
-
-mkdir -p "$WCP_DIR/agents" "$WCP_DIR/logs"
-
-heartbeat() {{
-  local code=$?
-  echo "{{\\"ts\\":$(date +%s),\\"exit_code\\":$code}}" > "$WCP_DIR/agents/$NAME.heartbeat"
-}}
-trap heartbeat EXIT
-
-exec 9>"$WCP_DIR/agents/$NAME.lock"
-flock -n 9 || exit 0
-
-# WCP_DRY_RUN=1 means: change nothing outside $WCP_DIR.
-# TODO: replace this with the agent's work.
-printf '{{"ts":%s,"agent":"%s","status":"ok","summary":"ran"}}\\n' "$(date +%s)" "$NAME" >> "$LOG_FILE"
-
-if [ "$(wc -l < "$LOG_FILE")" -gt "$MAX_LINES" ]; then
-  tail -n "$MAX_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
-fi
+''' + PROLOGUE + '''
+# WCP_DRY_RUN=1 means: change nothing outside $WCP_DIR (the helpers already
+# write nothing then). TODO: replace this with the agent's work.
+"$OPS" agent log "$NAME" "ran"
 '''
 
 PYTHON = '''#!/usr/bin/env bash
 # wcp-agent: {name}
 # wcp-agent-version: 0.1.0
 # wcp-agent-description: {description}
-set -euo pipefail
-
-NAME="{name}"
-WCP_DIR="${{WCP_DIR:-/root/.wcp}}"
-export NAME WCP_DIR
-
-mkdir -p "$WCP_DIR/agents" "$WCP_DIR/logs"
-
-heartbeat() {{
-  local code=$?
-  echo "{{\\"ts\\":$(date +%s),\\"exit_code\\":$code}}" > "$WCP_DIR/agents/$NAME.heartbeat"
-}}
-trap heartbeat EXIT
-
-exec 9>"$WCP_DIR/agents/$NAME.lock"
-flock -n 9 || exit 0
-
+''' + PROLOGUE + '''
 python3 - <<'PY'
 import os
-import sys
+import subprocess
 
-sys.path.insert(0, os.path.join(os.environ.get("WCP_DIR", "/root/.wcp"), "agents"))
-from wcp_agent_lib import dry_run, emit_result, list_sites
-
-name = os.environ["NAME"]
-# TODO: replace this with the agent's work. list_sites() is read-only;
-# engine_call() refuses to change anything while WCP_DRY_RUN=1.
-sites = list_sites()
-emit_result(name, "ok", "checked %d sites" % len(sites), sites=len(sites), dry_run=dry_run())
+ops, name = os.environ["OPS"], os.environ["NAME"]
+dry_run = os.environ.get("WCP_DRY_RUN") == "1"
+# TODO: replace this with the agent's work. The helpers are plain commands, so
+# the Python part needs no import: heartbeat and lock are done above.
+subprocess.run([ops, "agent", "log", name, "ran (dry run: %s)" % dry_run], check=True)
 PY
 '''
 
-# Stands in for ops-engine during `run`: answers capabilities and records
-# every call, so an agent can be exercised without a server.
-ENGINE_STUB = r"""#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$WCP_STUB_CALLS"
-if [ "${1:-}" = "capabilities" ]; then
-  echo '{"protocolVersion":1,"operation":"capabilities","ok":true,"result":{"operations":["version","capabilities","doctor"]},"warnings":[],"error":null}'
-else
-  echo '{"protocolVersion":1,"operation":"stub","ok":true,"result":null,"warnings":[],"error":null}'
-fi
-"""
+# Stands in for ops-engine during `run` when no real binary is given: it
+# implements `agent heartbeat|lock|log` as the engine documents them (same
+# files, exit codes and dry-run rule), answers `capabilities`, and records
+# every call. Keep it in step with operations-engine docs/agent-helpers.md.
+ENGINE_STUB = r'''#!/usr/bin/env python3
+import fcntl, json, os, re, sys, time
 
+args = sys.argv[1:]
+with open(os.environ["WCP_STUB_CALLS"], "a") as calls:
+    calls.write(" ".join(args) + "\n")
+wcp = os.environ.get("WCP_DIR", "/root/.wcp")
+dry = os.environ.get("WCP_DRY_RUN") == "1"
+
+
+def usage(message):
+    print("agent: " + message, file=sys.stderr)
+    sys.exit(2)
+
+
+def name_of(rest):
+    if not rest or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", rest[0]):
+        usage("invalid agent name")
+    return rest[0]
+
+
+def option(rest, flag, default=None):
+    if flag in rest:
+        i = rest.index(flag)
+        value = rest[i + 1]
+        del rest[i:i + 2]
+        return value
+    return default
+
+
+if args[:1] == ["capabilities"]:
+    print('{"protocolVersion":1,"operation":"capabilities","ok":true,"result":'
+          '{"operations":["version","capabilities","doctor"]},"warnings":[],"error":null}')
+elif args[:2] == ["agent", "heartbeat"]:
+    rest = args[2:]
+    code = int(option(rest, "--exit-code", "0"))
+    name = name_of(rest)
+    if not dry:
+        os.makedirs(os.path.join(wcp, "agents"), exist_ok=True)
+        with open(os.path.join(wcp, "agents", name + ".heartbeat"), "w") as f:
+            f.write(json.dumps({"ts": int(time.time()), "exit_code": code}, separators=(",", ":")) + "\n")
+elif args[:2] == ["agent", "log"]:
+    rest = args[2:]
+    level = option(rest, "--level", "info")
+    option(rest, "--max-lines", "2000")
+    name = name_of(rest)
+    message = " ".join(rest[1:]) or sys.stdin.read().rstrip("\n")
+    if not dry:
+        os.makedirs(os.path.join(wcp, "logs"), exist_ok=True)
+        with open(os.path.join(wcp, "logs", name + ".log"), "a") as f:
+            f.write(json.dumps({"ts": int(time.time()), "agent": name, "level": level,
+                                "msg": message[:2000]}, separators=(",", ":")) + "\n")
+elif args[:2] == ["agent", "lock"]:
+    rest = args[2:]
+    command = []
+    if "--" in rest:
+        i = rest.index("--")
+        rest, command = rest[:i], rest[i + 1:]
+    check = "--check" in rest
+    if check:
+        rest.remove("--check")
+    held_code = int(option(rest, "--held-exit-code", "0"))
+    name = name_of(rest)
+    if check == bool(command):
+        usage("give either --check or a command after --")
+    os.makedirs(os.path.join(wcp, "agents"), exist_ok=True)
+    fd = os.open(os.path.join(wcp, "agents", name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(75 if check else held_code)
+    if check:
+        sys.exit(0)
+    os.set_inheritable(fd, True)
+    os.environ["WCP_LOCK_HELD"] = name
+    try:
+        os.execvp(command[0], command)
+    except OSError:
+        sys.exit(127)
+else:
+    print('{"protocolVersion":1,"operation":"stub","ok":true,"result":null,"warnings":[],"error":null}')
+'''
 
 # macOS has no flock(1). The shim implements `flock -n FD` for scripts under
 # test; it is used only when the real command is missing.
@@ -164,7 +217,7 @@ def cmd_new(args) -> int:
         return fail(str(exc))
     values = dict(
         name=name, author=author, description=description, schedule=schedule,
-        schedule_kind="configurable" if schedule else "none",
+        schedule_kind="configurable" if schedule else "none", min_engine=HELPERS_MIN_ENGINE,
     )
     target.mkdir(parents=True)
     (target / "agent.toml").write_text(TOML.format(**values))
@@ -223,9 +276,10 @@ def cmd_api(_args) -> int:
     return 0
 
 
-def run_agent(name: str, dry_run: bool = False, timeout: int = 60) -> dict:
+def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str = None) -> dict:
     """Run agents/<name> the way the engine would, but inside a scratch WCP_DIR
-    with a stub engine, then check the contract. Returns a report dict."""
+    with a stub engine (or the real binary given as `engine`), then check the
+    contract. Returns a report dict."""
     directory = ROOT / "agents" / name
     errors = check_agents.check(directory)
     if errors:
@@ -244,8 +298,11 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60) -> dict:
         installed.chmod(0o755)
         shutil.copy(LIB, agents_dir / "wcp_agent_lib.py")
         stub = scratch / "ops-engine"
-        stub.write_text(ENGINE_STUB)
-        stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+        if engine:
+            stub = Path(engine).resolve()
+        else:
+            stub.write_text(ENGINE_STUB)
+            stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
         calls = scratch / "engine-calls.log"
         shim_dir = scratch / "bin"
         shim_dir.mkdir()
@@ -274,7 +331,9 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60) -> dict:
         try:
             beat = json.loads(heartbeat.read_text())
         except (OSError, ValueError):
-            problems.append("no valid heartbeat written on exit")
+            # The engine helper writes no heartbeat in a dry run, by design.
+            if not dry_run:
+                problems.append("no valid heartbeat written on exit")
         if beat is not None and (not isinstance(beat, dict) or set(beat) != {"ts", "exit_code"}
                                  or beat["exit_code"] != code):
             problems.append(f"heartbeat {beat} does not match exit code {code}")
@@ -315,7 +374,7 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60) -> dict:
 def cmd_run(args) -> int:
     if not (ROOT / "agents" / args.name).is_dir():
         return fail(f"no agent {args.name}")
-    report = run_agent(args.name, dry_run=args.dry_run, timeout=args.timeout)
+    report = run_agent(args.name, dry_run=args.dry_run, timeout=args.timeout, engine=args.engine)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
@@ -352,6 +411,7 @@ def main(argv=None) -> int:
     run.add_argument("--dry-run", action="store_true", help="set WCP_DRY_RUN=1")
     run.add_argument("--json", action="store_true")
     run.add_argument("--timeout", type=int, default=60)
+    run.add_argument("--engine", help="use this real ops-engine binary instead of the built-in stub")
     run.set_defaults(func=cmd_run)
     sub.add_parser("list", help="list agents").set_defaults(func=cmd_list)
     show = sub.add_parser("show", help="print one manifest as JSON")

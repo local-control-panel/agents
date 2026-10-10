@@ -10,7 +10,7 @@ server.
 | [Writing an agent](writing-agents.md) | What an agent is, how it runs, the rules it must follow, how to test it and how it is published |
 | [`agent.toml` reference](agent-toml-reference.md) | Every metadata field, its allowed values and what checks it |
 | [Security and trust model](security-model.md) | Who is trusted with what, what the engine enforces, what it does not |
-| [Agent API and commands](agent-api.md) | The shared command library: scaffolding, local runs, dry run, library helpers, and what the engine still has to add |
+| [Agent API and commands](agent-api.md) | The shared `ops-engine agent` helper commands (heartbeat, lock, log, ...), the developer CLI, dry run, and what the engine still has to add |
 | [Examples](examples.md) | A minimal agent, a realistic Bash agent and a realistic Python agent |
 
 If you have never written one, read *Writing an agent*, then copy

@@ -103,7 +103,8 @@ are linted for obvious mismatches. They are **not a sandbox**.
 - `sh`/`bash` or `python3` only; no interactive input; no network access unless
   the description says so.
 - Exit non-zero on failure; take a lock so a second start does nothing.
-- Write `<name>.heartbeat` the way the built-in agents do.
+- Write `<name>.heartbeat` the way the built-in agents do (or with
+  `ops-engine agent heartbeat`; see [Agent API](docs/agent-api.md)).
 - Touch nothing outside the declared `paths`.
 
 ## Writing an agent
