@@ -173,9 +173,25 @@ longer than its interval silently skips runs.
 ## Helper commands and the shared Python library
 
 Shared behaviour for Bash and Python agents is an `ops-engine agent <sub>`
-command (`heartbeat`, `lock`, `log` now; result, config and site helpers next),
+command (`heartbeat`, `lock`, `log`, `result`, `config`, `site`, `version`),
 described in [Agent API](agent-api.md). The Python library below is a frozen
 compatibility layer for agents already published: no new helper is added to it.
+
+| Command | Use it to |
+| --- | --- |
+| `agent heartbeat NAME --exit-code N` | Write the heartbeat (in an `EXIT` trap) |
+| `agent lock NAME -- CMD...` | Run CMD under the agent's lock |
+| `agent log NAME [--level L] MSG...` | Append a bounded JSON log line |
+| `agent result emit NAME --status ok\|warn\|fail\|skipped --summary TEXT [--data K=V]...` | Record what the run found: the result line the panel shows. Keys that look like secrets are refused; never put a secret in a summary |
+| `agent config get NAME KEY [--default V]`, `agent config list NAME` | Read the agent's own `agents/NAME.conf` (`KEY=VALUE`), instead of parsing files yourself |
+| `agent site list [--json]` | The sites on this server, one domain per line |
+| `agent version` | The helpers this engine has (also `capabilities`, `features.agentHelpers`) |
+
+They need an engine that has them: set `min_engine` accordingly (see the
+[Agent API](agent-api.md)). Under `WCP_DRY_RUN=1` the writing helpers write
+nothing. The engine puts `WCP_DIR`, `OPS_ENGINE` and a `PATH` with
+`/usr/local/bin` into the cron line or systemd unit of every agent it
+installs, so `"$OPS" agent ...` works under cron's minimal environment.
 
 `wcp_agent_lib.py` holds small helpers the built-in agents share. The engine
 writes it next to every agent it installs, so a Python agent can import it:

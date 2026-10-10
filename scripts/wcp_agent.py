@@ -70,6 +70,9 @@ BASH = '''#!/usr/bin/env bash
 # WCP_DRY_RUN=1 means: change nothing outside $WCP_DIR (the helpers already
 # write nothing then). TODO: replace this with the agent's work.
 "$OPS" agent log "$NAME" "ran"
+# One result line per run: what the panel shows. status is ok, warn, fail or
+# skipped; never put a secret in the summary or in --data.
+"$OPS" agent result emit "$NAME" --status ok --summary "TODO: say what this run found"
 '''
 
 PYTHON = '''#!/usr/bin/env bash
@@ -86,21 +89,26 @@ dry_run = os.environ.get("WCP_DRY_RUN") == "1"
 # TODO: replace this with the agent's work. The helpers are plain commands, so
 # the Python part needs no import: heartbeat and lock are done above.
 subprocess.run([ops, "agent", "log", name, "ran (dry run: %s)" % dry_run], check=True)
+subprocess.run([ops, "agent", "result", "emit", name, "--status", "ok",
+                "--summary", "TODO: say what this run found"], check=True)
 PY
 '''
 
 # Stands in for ops-engine during `run` when no real binary is given: it
-# implements `agent heartbeat|lock|log` as the engine documents them (same
-# files, exit codes and dry-run rule), answers `capabilities`, and records
-# every call. Keep it in step with operations-engine docs/agent-helpers.md.
-ENGINE_STUB = r'''#!/usr/bin/env python3
-import fcntl, json, os, re, sys, time
+# implements `agent heartbeat|lock|log|result|config|site|version` as the engine
+# documents them (same files, exit codes and dry-run rule), answers
+# `capabilities`, and records every call. Keep it in step with operations-engine
+# docs/agent-helpers.md.
+ENGINE_STUB = r"""#!/usr/bin/env python3
+import fcntl, json, os, re, stat, sys, time
 
 args = sys.argv[1:]
 with open(os.environ["WCP_STUB_CALLS"], "a") as calls:
     calls.write(" ".join(args) + "\n")
 wcp = os.environ.get("WCP_DIR", "/root/.wcp")
 dry = os.environ.get("WCP_DRY_RUN") == "1"
+HELPERS = ["heartbeat", "lock", "log", "result", "config", "site", "version"]
+SECRET_WORDS = ("password", "passwd", "secret", "token", "apikey", "api_key", "credential", "private_key")
 
 
 def usage(message):
@@ -123,9 +131,93 @@ def option(rest, flag, default=None):
     return default
 
 
+def options(rest, flag):
+    values = []
+    while flag in rest:
+        values.append(option(rest, flag))
+    return values
+
+
+def flag(rest, name):
+    if name in rest:
+        rest.remove(name)
+        return True
+    return False
+
+
+def envelope(operation, result):
+    print(json.dumps({"protocolVersion": 1, "operation": operation, "ok": True, "result": result,
+                      "warnings": [], "error": None}, separators=(",", ":")))
+
+
+def append_log(name, line, max_lines=2000):
+    os.makedirs(os.path.join(wcp, "logs"), exist_ok=True)
+    path = os.path.join(wcp, "logs", name + ".log")
+    with open(path, "a") as f:
+        f.write(json.dumps(line, separators=(",", ":")) + "\n")
+    with open(path) as f:
+        lines = f.read().splitlines()
+    if len(lines) > max_lines:
+        with open(path, "w") as f:
+            f.write("\n".join(lines[-max_lines:]) + "\n")
+
+
+def conf_values(name):
+    path = os.path.join(wcp, "agents", name + ".conf")
+    if not os.path.exists(path):
+        return None
+    info = os.stat(path)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        print("agent: the agent configuration must be a regular file owned by the running user "
+              "and not writable by others", file=sys.stderr)
+        sys.exit(1)
+    values = {}
+    for number, raw in enumerate(open(path).read().splitlines(), 1):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        key, sep, value = raw.partition("=")
+        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key):
+            print("agent: line %d is not KEY=VALUE" % number, file=sys.stderr)
+            sys.exit(1)
+        values[key] = value
+    return values
+
+
+def sites():
+    manifests = os.environ.get("WCP_SITES_MANIFEST_DIR") or "/etc/operations-engine/sites"
+    root = os.environ.get("SITES_ROOT") or "/var/www"
+    found = {}
+    domain = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*")
+    try:
+        names = sorted(os.listdir(manifests))
+    except OSError:
+        names = []
+    for file in names:
+        try:
+            data = json.load(open(os.path.join(manifests, file)))
+            if file != data["siteId"] + ".json" or not domain.fullmatch(data["domain"]):
+                continue
+            found.setdefault(data["domain"], {
+                "siteId": data["siteId"], "domain": data["domain"], "siteUser": data["siteUser"],
+                "contentRoot": data["contentRoot"], "source": "manifest"})
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        entries = []
+    for entry in entries:
+        path = os.path.join(root, entry)
+        if "." in entry and domain.fullmatch(entry) and os.path.isdir(path) and not os.path.islink(path):
+            found.setdefault(entry, {"siteId": None, "domain": entry, "siteUser": None,
+                                     "contentRoot": path, "source": "filesystem"})
+    return [found[k] for k in sorted(found)]
+
+
 if args[:1] == ["capabilities"]:
     print('{"protocolVersion":1,"operation":"capabilities","ok":true,"result":'
-          '{"operations":["version","capabilities","doctor"]},"warnings":[],"error":null}')
+          '{"operations":["version","capabilities","doctor","site.list"],"features":{"agentHelpers":'
+          + json.dumps(HELPERS, separators=(",", ":")) + '}},"warnings":[],"error":null}')
 elif args[:2] == ["agent", "heartbeat"]:
     rest = args[2:]
     code = int(option(rest, "--exit-code", "0"))
@@ -137,14 +229,88 @@ elif args[:2] == ["agent", "heartbeat"]:
 elif args[:2] == ["agent", "log"]:
     rest = args[2:]
     level = option(rest, "--level", "info")
-    option(rest, "--max-lines", "2000")
+    max_lines = int(option(rest, "--max-lines", "2000"))
     name = name_of(rest)
     message = " ".join(rest[1:]) or sys.stdin.read().rstrip("\n")
     if not dry:
-        os.makedirs(os.path.join(wcp, "logs"), exist_ok=True)
-        with open(os.path.join(wcp, "logs", name + ".log"), "a") as f:
-            f.write(json.dumps({"ts": int(time.time()), "agent": name, "level": level,
-                                "msg": message[:2000]}, separators=(",", ":")) + "\n")
+        append_log(name, {"ts": int(time.time()), "agent": name, "level": level,
+                          "msg": message[:2000]}, max_lines)
+elif args[:3] == ["agent", "result", "emit"]:
+    rest = args[3:]
+    as_json = flag(rest, "--json")
+    status = option(rest, "--status")
+    summary = option(rest, "--summary")
+    pairs = options(rest, "--data")
+    data_json = option(rest, "--data-json")
+    max_lines = int(option(rest, "--max-lines", "2000"))
+    name = name_of(rest)
+    if status not in ("ok", "warn", "fail", "skipped"):
+        usage("--status must be ok, warn, fail or skipped")
+    if summary is None or not summary.strip():
+        usage("--summary must not be empty")
+    data = {}
+    if data_json is not None:
+        try:
+            data = json.loads(data_json)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            usage("--data-json must be a JSON object")
+    for pair in pairs:
+        if "=" not in pair:
+            usage("--data takes KEY=VALUE")
+        key, _, value = pair.partition("=")
+        data[key] = value
+    for key in data:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", key) or any(w in key.lower() for w in SECRET_WORDS):
+            usage("invalid or secret-looking data key: " + key)
+    if len(json.dumps(data, separators=(",", ":"))) > 4096:
+        usage("result data is larger than 4096 bytes")
+    line = {"ts": int(time.time()), "agent": name, "status": status, "summary": summary[:500], "data": data}
+    if not dry:
+        append_log(name, line, max_lines)
+    if as_json:
+        envelope("agent.result.emit", {"agent": name, "written": not dry, "dryRun": dry, "line": line})
+elif args[:3] == ["agent", "config", "get"]:
+    rest = args[3:]
+    as_json = flag(rest, "--json")
+    default = option(rest, "--default")
+    name = name_of(rest)
+    key = rest[1] if len(rest) > 1 else ""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key):
+        usage("invalid config key")
+    values = conf_values(name) or {}
+    if key in values:
+        value, source = values[key], "file"
+    elif default is not None:
+        value, source = default, "default"
+    else:
+        print("agent: %s is not set" % key, file=sys.stderr)
+        sys.exit(1)
+    if as_json:
+        envelope("agent.config.get", {"agent": name, "key": key, "value": value, "source": source})
+    else:
+        print(value)
+elif args[:3] == ["agent", "config", "list"]:
+    rest = args[3:]
+    as_json = flag(rest, "--json")
+    name = name_of(rest)
+    keys = sorted(conf_values(name) or {})
+    if as_json:
+        envelope("agent.config.list", {"agent": name, "keys": keys})
+    elif keys:
+        print("\n".join(keys))
+elif args[:3] == ["agent", "site", "list"]:
+    found = sites()
+    if "--json" in args:
+        envelope("agent.site.list", {"sites": found})
+    elif found:
+        print("\n".join(site["domain"] for site in found))
+elif args[:2] == ["agent", "version"]:
+    if "--json" in args:
+        envelope("agent.version", {"helperApi": 1, "helpers": HELPERS, "engineVersion": "stub"})
+    else:
+        print("\n".join(["agent-helpers 1"] + HELPERS))
 elif args[:2] == ["agent", "lock"]:
     rest = args[2:]
     command = []
@@ -174,7 +340,7 @@ elif args[:2] == ["agent", "lock"]:
         sys.exit(127)
 else:
     print('{"protocolVersion":1,"operation":"stub","ok":true,"result":null,"warnings":[],"error":null}')
-'''
+"""
 
 # macOS has no flock(1). The shim implements `flock -n FD` for scripts under
 # test; it is used only when the real command is missing.
@@ -363,8 +529,17 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str =
             logs[log.name] = log.read_text().splitlines()[-5:]
         if code not in (0, None) and not dry_run:
             problems.append(f"exited with {code}")
+        result = None
+        for line in reversed(logs.get(f"{name}.log", [])):
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict) and "status" in entry:
+                result = entry
+                break
         return {"agent": name, "ok": not problems, "dry_run": dry_run, "exit_code": code,
-                "heartbeat": beat, "lock_ok": lock_ok, "files": files,
+                "heartbeat": beat, "result": result, "lock_ok": lock_ok, "files": files,
                 "engine_calls": engine_calls, "logs": logs, "problems": problems,
                 "stdout": stdout[-2000:], "stderr": stderr[-2000:]}
     finally:
@@ -380,6 +555,8 @@ def cmd_run(args) -> int:
     else:
         print(f"{report['agent']}: {'ok' if report['ok'] else 'FAILED'}"
               f" (exit {report.get('exit_code')}, dry-run {report.get('dry_run')})")
+        if report.get("result"):
+            print(f"  result: {report['result']['status']}: {report['result']['summary']}")
         for key in ("files", "engine_calls"):
             for item in report.get(key, []):
                 print(f"  {key}: {item}")
