@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -181,81 +182,146 @@ class BuiltinLocks(unittest.TestCase):
             self.assertEqual(check_agents.advise(directory.name, text), [], directory.name)
 
 
-class Library(unittest.TestCase):
+class FrozenLibrary(unittest.TestCase):
+    """lib/wcp_agent_lib.py is a compatibility layer: exactly the nine helpers
+    published agents import, nothing added (docs/agent-api.md section 7)."""
+
+    FROZEN = {"run", "run_argv", "shell_quote", "read_json", "write_json", "log_entry", "notify",
+              "database_dump_command", "sql_digest"}
+
+    def test_the_library_has_only_the_published_helpers(self):
+        self.assertEqual(check_agents.library_names(), self.FROZEN)
+
+    def test_phase_1_additions_are_gone(self):
+        for name in ("list_sites", "engine_call", "emit_result", "write_heartbeat", "dry_run",
+                     "read_conf", "wcp_dir", "LIB_API_VERSION"):
+            self.assertFalse(hasattr(lib, name), name)
+
+    def test_api_command_lists_the_frozen_helpers(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(wcp_agent.main(["api"]), 0)
+        listed = {line.split("(")[0] for line in out.getvalue().splitlines()
+                  if "(" in line and not line.startswith(" ")}
+        self.assertEqual(listed, self.FROZEN)
+
+
+class StubEngine(unittest.TestCase):
+    """The stub engine used by `run` behaves as docs/agent-helpers.md in the
+    engine says. With OPS_ENGINE_BIN set the same cases run against the real
+    binary, which is how the two are kept in step."""
+
     def setUp(self):
-        self.dir = tempfile.mkdtemp()
-        env = {"WCP_DIR": self.dir}
-        patch = mock.patch.dict(os.environ, env)
-        patch.start()
-        self.addCleanup(patch.stop)
-        os.environ.pop("WCP_DRY_RUN", None)
+        import subprocess
+        self.subprocess = subprocess
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.dir, True)
+        self.engines = {}
+        stub = self.dir / "ops-engine"
+        stub.write_text(wcp_agent.ENGINE_STUB)
+        stub.chmod(0o755)
+        self.engines["stub"] = str(stub)
+        real = os.environ.get("OPS_ENGINE_BIN")
+        if real:
+            self.engines["real"] = real
 
-    def test_heartbeat_is_the_documented_line(self):
-        path = lib.write_heartbeat("a", 2, now=100)
-        self.assertEqual(json.loads(Path(path).read_text()), {"ts": 100, "exit_code": 2})
-        self.assertEqual(path, os.path.join(self.dir, "agents", "a.heartbeat"))
+    def call(self, kind, *args, dry=False, env_extra=None):
+        wcp = self.dir / kind
+        env = dict(os.environ, WCP_DIR=str(wcp), WCP_STUB_CALLS=str(self.dir / "calls"),
+                   WCP_SITES_MANIFEST_DIR=str(self.dir / "manifests"), SITES_ROOT=str(self.dir / "www"))
+        env.pop("WCP_DRY_RUN", None)
+        if dry:
+            env["WCP_DRY_RUN"] = "1"
+        env.update(env_extra or {})
+        return self.subprocess.run([self.engines[kind], *args], env=env, capture_output=True,
+                                   text=True, stdin=subprocess.DEVNULL)
 
-    def test_read_conf(self):
-        conf = Path(self.dir) / "c.conf"
-        conf.write_text('# c\nA=1\nexport B="two words"\nC=\'x\'\nbad line\n=skip\n')
-        self.assertEqual(lib.read_conf(str(conf)), {"A": "1", "B": "two words", "C": "x"})
-        self.assertEqual(lib.read_conf(str(conf) + ".missing"), {})
-        self.assertIsNone(lib.read_conf(str(conf) + ".missing", default=None) or None)
+    def each(self):
+        for kind in self.engines:
+            with self.subTest(engine=kind):
+                yield kind
 
-    def test_list_sites_merges_manifests_and_directories(self):
-        manifests, www = Path(self.dir) / "m", Path(self.dir) / "www"
-        manifests.mkdir()
-        (www / "b.example").mkdir(parents=True)
-        (www / "a.example").mkdir()
-        (www / ".hidden").mkdir()
-        (www / "file").write_text("x")
-        (manifests / "1.json").write_text(json.dumps(
-            {"siteId": "id-1", "domain": "a.example", "contentRoot": "sites/id-1/current", "siteUser": "u"}))
-        (manifests / "2.json").write_text(json.dumps({"domain": "../evil"}))
-        (manifests / "3.json").write_text("not json")
-        sites = lib.list_sites(str(manifests), str(www))
-        self.assertEqual([s["domain"] for s in sites], ["a.example", "b.example"])
-        self.assertEqual(sites[0]["site_id"], "id-1")
-        self.assertEqual(sites[0]["source"], "manifest")
-        self.assertEqual(sites[1]["source"], "filesystem")
-        self.assertEqual(lib.list_sites(str(manifests) + "x", str(www) + "x"), [])
+    def log_lines(self, kind, name="demo"):
+        path = self.dir / kind / "logs" / f"{name}.log"
+        return [json.loads(line) for line in path.read_text().splitlines()]
 
-    def stub_engine(self, body):
-        path = Path(self.dir) / "engine"
-        path.write_text("#!/bin/sh\necho \"$@\" >> \"$0.calls\"\n" + body)
-        path.chmod(0o755)
-        os.environ["OPS_ENGINE"] = str(path)
-        self.addCleanup(os.environ.pop, "OPS_ENGINE", None)
-        return path
+    def test_result_emit_writes_the_documented_line(self):
+        for kind in self.each():
+            done = self.call(kind, "agent", "result", "emit", "demo", "--status", "warn", "--summary",
+                             "checked 3 sites", "--data", "sites=3", "--data-json", '{"slow": ["a"]}')
+            self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
+            line = self.log_lines(kind)[0]
+            self.assertEqual(set(line), {"ts", "agent", "status", "summary", "data"})
+            self.assertEqual((line["status"], line["summary"]), ("warn", "checked 3 sites"))
+            self.assertEqual(line["data"], {"slow": ["a"], "sites": "3"})
 
-    def test_engine_call_parses_and_survives_failures(self):
-        self.stub_engine('echo \'{"ok":true,"result":{"operations":["version","site.list"]}}\'\n')
-        self.assertEqual(lib.engine_operations(), {"version", "site.list"})
-        self.stub_engine("echo garbage\n")
-        self.assertEqual(lib.engine_call(["version"])["error"]["code"], "ENGINE_BAD_RESPONSE")
-        os.environ["OPS_ENGINE"] = str(Path(self.dir) / "missing")
-        self.assertEqual(lib.engine_call(["version"])["error"]["code"], "ENGINE_UNAVAILABLE")
-        self.assertEqual(lib.engine_operations(), set())
+    def test_result_emit_dry_run_and_bad_input(self):
+        for kind in self.each():
+            done = self.call(kind, "agent", "result", "emit", "dry", "--status", "ok", "--summary", "x",
+                             "--json", dry=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            envelope = json.loads(done.stdout)
+            self.assertEqual((envelope["result"]["written"], envelope["result"]["dryRun"]), (False, True))
+            self.assertFalse((self.dir / kind / "logs" / "dry.log").exists())
+            base = ["agent", "result", "emit", "bad", "--status", "ok", "--summary", "s"]
+            for extra in (["--data", "novalue"], ["--data", "api_token=1"], ["--data-json", "[1]"]):
+                self.assertEqual(self.call(kind, *base, *extra).returncode, 2, extra)
+            self.assertEqual(self.call(kind, "agent", "result", "emit", "bad", "--status", "great",
+                                       "--summary", "s").returncode, 2)
+            self.assertFalse((self.dir / kind / "logs" / "bad.log").exists())
 
-    def test_dry_run_blocks_mutations_but_not_reads(self):
-        engine = self.stub_engine('echo \'{"ok":true,"result":null}\'\n')
-        with mock.patch.dict(os.environ, {"WCP_DRY_RUN": "1"}):
-            blocked = lib.engine_call(["site", "deploy", "--site-id", "x"])
-            self.assertTrue(blocked["dryRun"])
-            self.assertFalse(Path(str(engine) + ".calls").exists())
-            lib.engine_call(["operation", "status", "--site-id", "x"])
-            self.assertTrue(Path(str(engine) + ".calls").exists())
+    def test_config_get_and_list(self):
+        for kind in self.each():
+            agents = self.dir / kind / "agents"
+            agents.mkdir(parents=True)
+            conf = agents / "demo.conf"
+            conf.write_text("# c\nWEBHOOK_URL=https://h.example/x?a=b\nTOKEN_FILE=/x\n")
+            conf.chmod(0o600)
+            get = lambda *a: self.call(kind, "agent", "config", "get", "demo", *a)  # noqa: E731
+            self.assertEqual(get("WEBHOOK_URL").stdout, "https://h.example/x?a=b\n")
+            self.assertEqual(get("NOPE", "--default", "7").stdout, "7\n")
+            self.assertEqual(get("NOPE").returncode, 1)
+            self.assertEqual(get("bad-key").returncode, 2)
+            listed = self.call(kind, "agent", "config", "list", "demo")
+            self.assertEqual(listed.stdout, "TOKEN_FILE\nWEBHOOK_URL\n")
+            conf.chmod(0o666)
+            self.assertEqual(get("WEBHOOK_URL").returncode, 1)
+            self.assertEqual(self.call(kind, "agent", "config", "get", "nofile", "K").returncode, 1)
 
-    def test_emit_result(self):
-        entry = lib.emit_result("a", "warn", "careful", count=3)
-        line = json.loads(Path(lib.log_file("a")).read_text())
-        self.assertEqual(line, entry)
-        self.assertEqual((line["status"], line["count"]), ("warn", 3))
-        with self.assertRaises(ValueError):
-            lib.emit_result("a", "great", "x")
-        with mock.patch.dict(os.environ, {"WCP_DRY_RUN": "1"}):
-            lib.emit_result("b", "ok", "x")
-        self.assertFalse(Path(lib.log_file("b")).exists())
+    def test_site_list_and_version(self):
+        for kind in self.each():
+            (self.dir / "manifests").mkdir(exist_ok=True)
+            (self.dir / "www" / "b.example.com").mkdir(parents=True, exist_ok=True)
+            (self.dir / "www" / "html").mkdir(exist_ok=True)
+            site_id = "11111111-1111-4111-8111-111111111111"
+            manifest = self.dir / "manifests" / f"{site_id}.json"
+            manifest.write_text(json.dumps({
+                "schemaVersion": 1, "siteId": site_id, "domain": "a.example.com", "siteUser": "u1",
+                "contentRoot": f"sites/{site_id}/current",
+                "repository": {"url": "u", "allowedBranches": ["main"], "credentialId": site_id}}))
+            manifest.chmod(0o644)
+            self.assertEqual(self.call(kind, "agent", "site", "list").stdout,
+                             "a.example.com\nb.example.com\n")
+            sites = json.loads(self.call(kind, "agent", "site", "list", "--json").stdout)["result"]["sites"]
+            self.assertEqual([s["source"] for s in sites], ["manifest", "filesystem"])
+            self.assertEqual(sites[0]["siteId"], site_id)
+            self.assertNotIn("repository", sites[0])
+            lines = self.call(kind, "agent", "version").stdout.splitlines()
+            self.assertEqual(lines[0], "agent-helpers 1")
+            self.assertEqual(lines[1:], ["heartbeat", "lock", "log", "result", "config", "site", "version"])
+
+    def test_the_scaffold_result_line_reaches_the_report(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        (root / "agents").mkdir()
+        with mock.patch.object(wcp_agent, "ROOT", root), \
+                contextlib.redirect_stdout(io.StringIO()):
+            wcp_agent.main(["new", "demo-r", "--schedule", "0 * * * *"])
+            report = wcp_agent.run_agent("demo-r")
+            dry = wcp_agent.run_agent("demo-r", dry_run=True)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["result"]["status"], "ok")
+        self.assertIsNone(dry["result"])
 
 
 class ImportCheck(unittest.TestCase):
@@ -270,10 +336,6 @@ class ImportCheck(unittest.TestCase):
         meta = {"version": "1.0.0", "name": "demo"}
         errors = check_agents.check_script("demo", meta, "# wcp-agent: other\n# wcp-agent-version: 1.0.0\n")
         self.assertTrue(any("'# wcp-agent'" in e for e in errors), errors)
-
-    def test_new_helpers_are_known(self):
-        for name in ("list_sites", "engine_call", "emit_result", "write_heartbeat", "dry_run"):
-            self.assertIn(name, check_agents.library_names())
 
 
 if __name__ == "__main__":

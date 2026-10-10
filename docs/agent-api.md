@@ -1,8 +1,10 @@
 # Agent API and helper commands
 
-Status: design. Phase 1 (developer CLI) is implemented in this repository;
-phase 2 starts with `ops-engine agent heartbeat`, `lock` and `log`
-(operations-engine, `docs/agent-helpers.md`). Revision 2: the shared helpers are
+Status: phases 1, 2a and 2b are implemented. Phase 1 (developer CLI) is in this
+repository; `ops-engine agent heartbeat`, `lock`, `log` (2a, operations-engine
+PR #75) and `result`, `config`, `site`, `version` (2b, PR #77) are in the engine
+(`docs/agent-helpers.md` there). Nothing has been released yet: no engine
+version contains the helpers. Revision 2: the shared helpers are
 **Rust subcommands of the engine**, not a Python library.
 Audience: people who write agents, and the maintainers (including tools that
 generate agents for us).
@@ -84,8 +86,8 @@ needed.
 
 ### 4.2 Surface
 
-Status: **done** (merged with phase 2a, operations-engine PR #75),
-**next** (phase 2b), **later**.
+Status: **done** (merged, not yet in an engine release: 2a is operations-engine
+PR #75, 2b is PR #77), **later**.
 
 | Command | Does | Status |
 | --- | --- | --- |
@@ -93,12 +95,12 @@ Status: **done** (merged with phase 2a, operations-engine PR #75),
 | `agent lock NAME -- CMD...` | Takes the agent's lock without blocking, then **`exec`s** CMD with the lock descriptor inherited, so the lock lasts exactly as long as CMD and the exit code is CMD's. **Lock already held: CMD is not started, exit 0** (`--held-exit-code N` to change, `--json` to say so). Sets `WCP_LOCK_HELD=NAME` so a script can re-run itself under the wrapper | done |
 | `agent lock NAME --check` | Probe only: exit 0 free, 75 held. For tests and the panel | done |
 | `agent log NAME [--level debug\|info\|warn\|error] [--max-lines N] [MSG...]` | Appends `{"ts","agent","level","msg"}` (one JSON line, message cut at 2000 characters) to `logs/NAME.log` and keeps the last N lines (default 2000, at most 100000), under a lock on the file. Message from stdin when no argument or `-` | done |
-| `agent result emit NAME --status ok\|warn\|fail\|skipped --summary TEXT [--data KEY=VALUE]... [--data-json JSON]` | Appends the **result line** `{"ts","agent","status","summary","data":{...}}` the panel shows (summary cut at 500 characters, `data` is an object, at most 4 KiB, secrets forbidden) to the same log. Not written in a dry run; echoed with `--json` | next |
-| `agent config get NAME KEY [--default V] [--json]` | Reads KEY from the agent's own file `agents/NAME.conf` (`KEY=VALUE`, no shell evaluation); prints the value; exit 1 if missing and no default. `agent config list NAME` prints key names only (never values). Same call before and after per-agent files exist (E6): today it falls back to the shared `*.conf` files named in the agent's manifest | next |
-| `agent site list [--json]` | The sites on this server: `siteId`, `domain`, `siteUser`, `contentRoot`, runtime. Read-only; reads the engine's own manifests (replaces `list_sites()` and E2). Plain output is one domain per line, so `while read` works; `--json` is the full envelope | next |
+| `agent result emit NAME --status ok\|warn\|fail\|skipped --summary TEXT [--data KEY=VALUE]... [--data-json JSON]` | Appends the **result line** `{"ts","agent","status","summary","data":{...}}` the panel shows (summary cut at 500 characters, `data` is an object, at most 4 KiB, secrets forbidden) to the same log. Not written in a dry run; echoed with `--json`. A data key containing `password`, `passwd`, `secret`, `token`, `apikey`, `api_key`, `credential` or `private_key` is refused (exit 2) | done (2b) |
+| `agent config get NAME KEY [--default V] [--json]` | Reads KEY from the agent's own file `agents/NAME.conf` (`KEY=VALUE`, no shell evaluation); prints the value; exit 1 if missing and no default. `agent config list NAME` prints key names only (never values). The file must be a regular file owned by the running user and not writable by others (`O_NOFOLLOW`, at most 64 KiB); a malformed line fails with exit 1 and is never echoed. The shared `*.conf` files that built-in agents read directly (JSON) are **not** consulted: the engine does not know which agent uses which, so an agent that wants the new call reads `agents/NAME.conf`, written by `agent configure` (phase 4) | done (2b) |
+| `agent site list [--json]` | The sites on this server: `siteId`, `domain`, `siteUser`, `contentRoot`, `source`. Read-only; reads the engine's own manifests plus dot-named directories under `/var/www` that have none (`siteId` null, `source` `filesystem`). The runtime is not recorded in a manifest, so it is not reported (the panel knows it). Plain output is one domain per line, so `while read` works; `--json` is the full envelope. The same data is the protocol operation `site.list` | done (2b) |
 | `agent tool status NAME` / `agent tool ensure NAME` | `status`: is the allow-listed tool (rclone, docker, wp-cli, ...) present, at what version; exit 0/1. `ensure`: converge it using the engine's existing installers; a dry run only reports. An agent calls `ensure` only if the **operator** enabled it; by default an agent that misses a tool exits non-zero with one line and `result emit --status fail` (E5) | later |
 | `agent run NAME [--dry-run] [--json]` | Starts an installed agent once with the same wrapper cron uses and returns its heartbeat and last result line; for "try it" in the panel (E7) | later |
-| `agent version` / a `capabilities` feature `agentHelpers: ["heartbeat", ...]` | Lets an agent or the developer CLI discover which helpers this engine has | next |
+| `agent version [--json]` / a `capabilities` feature `agentHelpers: ["heartbeat", ...]` | Prints `agent-helpers N` then the helper names, one per line; lets an agent or the developer CLI discover which helpers this engine has. `ops-engine agent help` lists every subcommand | done (2b) |
 
 Why `lock` wraps a command instead of "acquire and return": a lock must outlive
 the process that takes it, and a child process cannot hand a descriptor back to
@@ -123,7 +125,7 @@ trap '"$OPS" agent heartbeat "$NAME" --exit-code $?' EXIT
 
 "$OPS" agent log "$NAME" "started"
 # ... the work ...
-"$OPS" agent result emit "$NAME" --status ok --summary "checked 3 sites"   # next
+"$OPS" agent result emit "$NAME" --status ok --summary "checked 3 sites"
 ```
 
 A Python agent keeps the same Bash prologue and calls the same commands from its
@@ -176,11 +178,12 @@ Unchanged in purpose; they never run on a server.
 Exists: the contract, `agent.toml`, `check_agents.py`, the registry and release
 pipeline, `WCP_DIR` and the other overrides in the built-in agents, the engine
 envelope, `capabilities`, `agent.install`, `agent.installFromRegistry`,
-`agent.approve`, `agent.remove`, the developer CLI, and (engine PR #75)
-`agent heartbeat`, `agent lock`, `agent log`.
+`agent.approve`, `agent.remove`, the developer CLI, and (engine PRs #75 and
+#77) `agent heartbeat`, `lock`, `log`, `result emit`, `config get|list`,
+`site list`, `version`, the `site.list` operation, and the explicit `WCP_DIR`,
+`OPS_ENGINE` and `PATH` in every agent cron line and systemd unit (E8, PR #76).
 
-Does not exist yet: `result emit`, `config get`, `site list`, `tool`
-subcommands, `agent run`, per-agent secrets, declarative requirements in
+Does not exist yet: `tool` subcommands, `agent run`, per-agent secrets, declarative requirements in
 `agent.toml`, anything the built-in agents use of the above (they still carry
 their own prologue; migrating them needs a version bump each).
 
@@ -193,12 +196,11 @@ their own prologue; migrating them needs a version bump each).
 - **No new helper is added.** New shared behaviour is an `ops-engine agent`
   subcommand. If Python wants a nicer call, it is at most a three-line wrapper
   over the subcommand with no logic of its own.
-- The phase 1 additions in this file (`wcp_dir`, `dry_run`, `write_heartbeat`,
-  `read_conf`, `list_sites`, `engine_call`, `engine_operations`, `emit_result`,
-  `LIB_API_VERSION` 2) never reached a server (the engine's compiled copy does
-  not contain them) and no published agent uses them. They are **deprecated**
-  and will be removed from this file in the next library sync; do not use
-  them in new agents.
+- The phase 1 additions (`wcp_dir`, `dry_run`, `write_heartbeat`, `read_conf`,
+  `list_sites`, `engine_call`, `engine_operations`, `emit_result`,
+  `LIB_API_VERSION` 2) never reached a server and no published agent used
+  them. They were **removed** in phase 2b; the file is again byte-identical to
+  the engine's compiled copy, and a test pins the nine frozen names.
 - The engine's compiled copy of the file keeps shipping as long as any
   published agent imports it. Dropping the copy altogether is a later,
   separate decision.
@@ -259,7 +261,7 @@ Engine (`operations-engine`):
 
 - **H1. `agent heartbeat|lock|log`** (done, PR #75).
 - **H2. `agent result emit`, `agent config get|list`, `agent site list`**, and
-  the discovery feature in `capabilities`/`agent version`.
+  the discovery feature in `capabilities`/`agent version` (done, PR #77).
 - **H3. `agent tool status|ensure`** (was E5; reuses `backup.installRclone`,
   `system.installDocker`, `tool.install`...).
 - **E3. `agent.list` / `agent.status`** (installed agents, version, schedule,
@@ -269,8 +271,10 @@ Engine (`operations-engine`):
 - **E6. `agent.configure`.** Writes `$WCP_DIR/agents/<name>.conf` (`0600`) from
   validated pairs; secrets never appear in responses or logs.
 - **E7. `agent run`** (manual run, optional dry run).
-- **E8. Per-agent cron line / systemd unit environment.** Put `WCP_DIR` and
-  `OPS_ENGINE` in explicitly.
+- **E8. Per-agent cron line / systemd unit environment** (done, PR #76). The
+  engine writes `WCP_DIR`, `OPS_ENGINE` and a `PATH` with `/usr/local/bin` into
+  every agent cron line and `Environment=` into every sandboxed unit; a line
+  written by an older engine gets them when the agent is installed again.
 - Release: bump the crate version when the helpers ship so `min_engine` can
   name them.
 
@@ -293,9 +297,10 @@ Panel (`website-control-panel`):
 | --- | --- | --- | --- |
 | 1 (done) | Developer CLI, scaffolds, checker improvements, tests, docs | agents | nothing |
 | 2a (done) | `agent heartbeat`, `lock`, `log`; scaffolds and the runner use them; this design | engine, agents | phase 1 |
-| 2b | `result emit`, `config get\|list`, `site list`, discovery; `requires_*` enforced; compat library frozen and its phase 1 additions removed; engine release that names `min_engine`; move the five agents' plain lock to `agent lock` | engine, agents | 2a released |
-| 3 | `tool status\|ensure`, E3, E6; P1 to P3 | engine, panel, agents | 2b |
-| 4 | `agent run` and dry run from the panel (E7), scenario `test`, optional Rust port of the developer CLI | all | 3 |
+| 2b (done) | `result emit`, `config get\|list`, `site list` (and `site.list`), discovery; compat library frozen and its phase 1 additions removed; explicit environment in cron lines and units (E8) | engine, agents | 2a |
+| 3 | `tool status\|ensure`; `requires_tools`, `requires_ops`, `min_engine` checked at install (E4) | engine, agents | 2b |
+| 4 | `agent run` with a dry run (E7), `agent configure` (E6); scenario `test`, optional Rust port of the developer CLI | engine, agents | 3 |
+| Release | Cut an engine release that contains the helpers, set `HELPERS_MIN_ENGINE`, move the five built-in agents to `agent lock`; then the panel (P1 to P4) | engine, agents, panel | 2b to 4, decision pending |
 
 ## 12. Using it
 
