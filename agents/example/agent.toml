@@ -1,6 +1,7 @@
 name = "example"
 version = "0.1.0"
 tier = "example"
+author = "Your Name"
 script = "agent.sh"
 schedule = "none"
 default_schedule = ""

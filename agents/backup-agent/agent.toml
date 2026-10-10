@@ -1,6 +1,7 @@
 name = "backup-agent"
 version = "1.1.1"
 tier = "official"
+author = "Website Control Panel"
 script = "agent.sh"
 schedule = "none"
 default_schedule = ""
