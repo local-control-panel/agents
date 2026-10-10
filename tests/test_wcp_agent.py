@@ -40,12 +40,13 @@ class Scaffold(unittest.TestCase):
         self.assertEqual(report["heartbeat"]["exit_code"], 0)
         self.assertTrue(report["lock_ok"])
 
-    def test_python_scaffold_uses_the_library_in_dry_run(self):
+    def test_python_scaffold_uses_the_engine_helpers_in_dry_run(self):
         self.assertEqual(self.new("demo-py", "--lang", "python"), 0)
         self.assertEqual(check_agents.check(self.root / "agents" / "demo-py"), [])
         report = wcp_agent.run_agent("demo-py", dry_run=True)
         self.assertTrue(report["ok"], report)
-        self.assertEqual(report["logs"], {})  # dry run writes no result line
+        self.assertEqual(report["logs"], {})  # dry run writes no log line
+        self.assertIsNone(report["heartbeat"])  # ...and no heartbeat
 
     def test_refuses_bad_or_existing_names_and_bad_text(self):
         self.assertEqual(self.new("Bad_Name"), 1)
@@ -58,7 +59,7 @@ class Scaffold(unittest.TestCase):
     def test_a_failing_agent_is_reported(self):
         self.new("broken")
         script = self.root / "agents" / "broken" / "agent.sh"
-        script.write_text(script.read_text().replace("# TODO", "exit 3 # TODO"))
+        script.write_text(script.read_text() + "exit 3\n")
         report = wcp_agent.run_agent("broken")
         self.assertFalse(report["ok"])
         self.assertEqual(report["heartbeat"]["exit_code"], 3)
@@ -66,10 +67,77 @@ class Scaffold(unittest.TestCase):
     def test_an_agent_without_a_heartbeat_is_reported(self):
         self.new("silent")
         script = self.root / "agents" / "silent" / "agent.sh"
-        script.write_text(script.read_text().replace("trap heartbeat EXIT", ""))
+        script.write_text(script.read_text().replace("trap '\"$OPS\" agent heartbeat \"$NAME\" --exit-code $?' EXIT", ""))
         report = wcp_agent.run_agent("silent")
         self.assertFalse(report["ok"])
         self.assertTrue(any("heartbeat" in p for p in report["problems"]), report)
+
+
+class EngineHelpers(unittest.TestCase):
+    """The runner's stub engine must behave like the real helpers."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        stub = self.dir / "ops-engine"
+        stub.write_text(wcp_agent.ENGINE_STUB)
+        stub.chmod(0o755)
+        self.stub = str(stub)
+        self.env = dict(os.environ, WCP_DIR=str(self.dir), WCP_STUB_CALLS=str(self.dir / "calls"))
+        self.env.pop("WCP_DRY_RUN", None)
+
+    def call(self, *args, **env):
+        import subprocess
+        return subprocess.run([self.stub, *args], env=dict(self.env, **env), capture_output=True,
+                              text=True, stdin=subprocess.DEVNULL)
+
+    def test_heartbeat_and_log(self):
+        self.assertEqual(self.call("agent", "heartbeat", "demo", "--exit-code", "4").returncode, 0)
+        beat = json.loads((self.dir / "agents" / "demo.heartbeat").read_text())
+        self.assertEqual(beat["exit_code"], 4)
+        self.assertEqual(self.call("agent", "log", "demo", "--level", "warn", "a", "b").returncode, 0)
+        line = json.loads((self.dir / "logs" / "demo.log").read_text())
+        self.assertEqual((line["level"], line["msg"]), ("warn", "a b"))
+
+    def test_dry_run_writes_nothing_and_bad_names_exit_2(self):
+        self.call("agent", "heartbeat", "demo", WCP_DRY_RUN="1")
+        self.call("agent", "log", "demo", "x", WCP_DRY_RUN="1")
+        self.assertFalse((self.dir / "agents").exists() or (self.dir / "logs").exists())
+        self.assertEqual(self.call("agent", "heartbeat", "../x").returncode, 2)
+
+    def test_lock_wrapper_runs_holds_and_skips(self):
+        out = self.call("agent", "lock", "demo", "--", "sh", "-c", "echo $WCP_LOCK_HELD; exit 5")
+        self.assertEqual((out.returncode, out.stdout), (5, "demo\n"))
+        self.assertEqual(self.call("agent", "lock", "demo", "--check").returncode, 0)
+        import fcntl
+        with open(self.dir / "agents" / "demo.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.call("agent", "lock", "demo", "--check").returncode, 75)
+            self.assertEqual(self.call("agent", "lock", "demo", "--", "false").returncode, 0)
+            self.assertEqual(
+                self.call("agent", "lock", "demo", "--held-exit-code", "9", "--", "false").returncode, 9)
+
+
+REAL_ENGINE = os.environ.get("WCP_REAL_ENGINE")
+
+
+@unittest.skipUnless(REAL_ENGINE and os.access(REAL_ENGINE, os.X_OK),
+                     "set WCP_REAL_ENGINE to a built ops-engine to run against it")
+class RealEngine(unittest.TestCase):
+    """The scaffolds against the engine's own helpers, not the stub."""
+
+    def test_scaffolds_pass_the_contract_with_the_real_engine(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "agents").mkdir()
+        with mock.patch.object(wcp_agent, "ROOT", root), \
+                contextlib.redirect_stdout(io.StringIO()):
+            for lang in ("bash", "python"):
+                self.assertEqual(wcp_agent.main(["new", f"real-{lang}", "--lang", lang]), 0)
+                report = wcp_agent.run_agent(f"real-{lang}", engine=REAL_ENGINE)
+                self.assertTrue(report["ok"], report)
+                self.assertTrue(report["lock_ok"])
+                dry = wcp_agent.run_agent(f"real-{lang}", dry_run=True, engine=REAL_ENGINE)
+                self.assertTrue(dry["ok"], dry)
+                self.assertEqual(dry["logs"], {})
 
 
 class Library(unittest.TestCase):

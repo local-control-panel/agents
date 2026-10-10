@@ -79,7 +79,15 @@ Every agent must:
    ```
 
    `ts` is the Unix time in seconds. Use an `EXIT` trap so a crash still
-   writes it:
+   writes it. On an engine that has the helper commands (see
+   [Agent API](agent-api.md); `new` writes this), let the engine write it:
+
+   ```bash
+   OPS="${OPS_ENGINE:-/usr/local/bin/ops-engine}"
+   trap '"$OPS" agent heartbeat "$NAME" --exit-code $?' EXIT
+   ```
+
+   The plain form works on every engine:
 
    ```bash
    heartbeat() {
@@ -88,12 +96,24 @@ Every agent must:
    }
    trap heartbeat EXIT
    ```
-4. **Take a lock** so a second start while one is running does nothing:
+4. **Take a lock** so a second start while one is running does nothing. With
+   the helper commands, re-run the script under the lock (a held lock exits 0
+   and runs nothing):
+
+   ```bash
+   [ "${WCP_LOCK_HELD:-}" = "$NAME" ] || exec "$OPS" agent lock "$NAME" -- bash "$0" "$@"
+   ```
+
+   The plain form:
 
    ```bash
    exec 9>"$WCP_DIR/agents/$NAME.lock"
    flock -n 9 || exit 0
    ```
+
+   Both take the same lock file, so old and new scripts exclude each other.
+   An agent that uses the helper commands must set `min_engine` to the engine
+   release that ships them.
 5. **Touch only the paths it declares** in `paths`. Declare every path the
    script reads or writes; reviewers and operators read this list to decide
    whether to trust the agent.
@@ -150,7 +170,12 @@ Keep the work well inside the interval. If a run is still going when the next
 one starts, your lock makes the second one exit, so a run that routinely takes
 longer than its interval silently skips runs.
 
-## The shared Python library
+## Helper commands and the shared Python library
+
+Shared behaviour for Bash and Python agents is an `ops-engine agent <sub>`
+command (`heartbeat`, `lock`, `log` now; result, config and site helpers next),
+described in [Agent API](agent-api.md). The Python library below is a frozen
+compatibility layer for agents already published: no new helper is added to it.
 
 `wcp_agent_lib.py` holds small helpers the built-in agents share. The engine
 writes it next to every agent it installs, so a Python agent can import it:
