@@ -1,6 +1,7 @@
 name = "cache-warmup"
 version = "1.0.0"
 tier = "official"
+author = "Website Control Panel"
 script = "agent.sh"
 schedule = "configurable"
 default_schedule = "0 4 * * *"

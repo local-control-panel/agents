@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import check_agents  # noqa: E402
 
+FIRST_PARTY = "Website Control Panel"
 LIB = "def hello():\n    return 1\n"
 
 
@@ -21,12 +22,12 @@ def bundled(version="1.0.0", lib=LIB, name="demo"):
     )
 
 
-def agent(script, version="1.0.0", extra=""):
+def agent(script, version="1.0.0", extra="", author='author = "Ada Example"\n'):
     directory = Path(tempfile.mkdtemp()) / "demo"
     directory.mkdir()
     (directory / "agent.sh").write_text(script)
     (directory / "agent.toml").write_text(
-        f'name = "demo"\nversion = "{version}"\ntier = "official"\nscript = "agent.sh"\n'
+        f'name = "demo"\nversion = "{version}"\ntier = "official"\n{author}script = "agent.sh"\n'
         f'schedule = "none"\ndefault_schedule = ""\nmin_engine = "0.1.0"\n'
         f'description = "d"\npaths = ["/root/.wcp"]\n{extra}'
     )
@@ -81,3 +82,27 @@ class Isolation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Author(unittest.TestCase):
+    def test_any_plain_name_passes(self):
+        for name in ("Ada Example", FIRST_PARTY, "ACME s.r.o."):
+            self.assertEqual(
+                check_agents.check(agent(bundled(), author=f'author = "{name}"\n'), LIB), [], name
+            )
+
+    def test_the_author_is_required(self):
+        errors = check_agents.check(agent(bundled(), author=""), LIB)
+        self.assertTrue(any("missing key author" in e for e in errors), errors)
+
+    def test_an_empty_padded_or_control_author_fails(self):
+        for value in ('""', '" Ada"', '"Ada "', '"Ada\\nExample"', '"' + "x" * 101 + '"'):
+            errors = check_agents.check(agent(bundled(), author=f"author = {value}\n"), LIB)
+            self.assertTrue(any("author must be" in e for e in errors), (value, errors))
+
+    def test_a_non_string_author_fails(self):
+        errors = check_agents.check(agent(bundled(), author="author = 7\n"), LIB)
+        self.assertTrue(any("author must be" in e for e in errors), errors)
+
+    def test_the_project_name_is_the_first_party_author(self):
+        self.assertIn(FIRST_PARTY, check_agents.FIRST_PARTY_AUTHORS)

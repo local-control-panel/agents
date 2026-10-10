@@ -8,6 +8,7 @@ published values again before installing.
 name = "disk-usage-report"
 version = "1.0.0"
 tier = "community"
+author = "Your Name"
 script = "agent.sh"
 schedule = "configurable"
 default_schedule = "0 6 * * *"
@@ -24,6 +25,7 @@ writable_paths = ["/root/.wcp/agents", "/root/.wcp/logs"]
 | --- | --- | --- |
 | `name` | string | Equals the directory name. Lowercase letters, digits and `-`; starts with a letter or digit; at most 64 characters. Cannot be the name of a built-in agent when installing through the registry |
 | `version` | string | The agent's own version, `x.y.z` (digits only). Raise it for every change to the script. The script header `# wcp-agent-version:` must match |
+| `author` | string | Required. The author's name: 1 to 100 characters, no leading or trailing spaces, no control characters. See [Author](#author) |
 | `tier` | string | `official`, `community`, or `example`. New agents use `community`; only owners set `official`. `example` marks the template and is never published |
 | `script` | string | File name of the script inside the agent's directory (a plain name, no `/`, not starting with `.`) |
 | `schedule` | string | `fixed`, `configurable` or `none`. See below |
@@ -69,12 +71,38 @@ sandbox does and does not do.
 
 ## What the published registry contains
 
-On release, `registry.json` records, per agent: `version`, `tier`, `schedule`,
+On release, `registry.json` records, per agent: `version`, `tier`, `author`, `schedule`,
 `defaultSchedule`, `minEngine`, `script`, `description`, `paths`, the isolation
 settings when present, and the SHA-256 of every file in the agent's directory.
 It also records the release tag, the commit and the list of revoked
 `{name, version}` pairs. These come straight from the tagged commit and are
 never typed by hand.
+
+## Author
+
+`author` is required and holds the name of the person or organisation that wrote
+the agent. Write your own.
+
+Whether an agent is first-party is decided from this one string:
+
+| Author | Treated as |
+| --- | --- |
+| exactly `Website Control Panel` (the project's name) | **first-party**, written by the maintainers |
+| any other name | **third-party** |
+
+A missing `author` is invalid: `check_agents.py` fails, so an agent without an
+author cannot be released. The checker also rejects an empty name, one over 100
+characters, one with leading or trailing spaces, and one with control characters.
+
+The checker cannot know who really wrote an agent. The maintainers verify the
+name during review: every pull request that adds an agent is read by an owner,
+and someone who writes `Website Control Panel` for their own agent is caught
+there. `author` is published in `registry.json` as written, and the panel shows
+it on every agent, with a "First-party" badge for the project's name and the
+warning "Reviewed, but 3rd party" for everything else.
+
+`author` is independent of `tier`. `tier` decides whether an operator must
+approve the exact script; `author` only says who wrote it.
 
 ## Revoking a version
 

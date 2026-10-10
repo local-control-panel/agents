@@ -23,6 +23,11 @@ docs repository, `operations-engine/design/agent-registry.md`).
   it), checks every file against `registry.json`, and installs through its
   existing atomic pipeline.
 - A `community` agent additionally needs an operator to approve its exact hash.
+- Every agent names its `author` in `agent.toml`. If the author is the project's own
+  name, `Website Control Panel`, the agent is first-party; any other name is
+  third-party. The maintainers check the name in the pull request that adds the
+  agent. The panel shows the author on every agent, a "First-party" badge for the
+  project's own, and the warning "Reviewed, but 3rd party" for all others.
 - A version listed in `revoked` is refused for new installs; installed copies
   only produce a warning in the panel.
 
@@ -47,6 +52,7 @@ revoked.json                    [{"name": "...", "version": "x.y.z"}] versions t
 name = "example"                 # equals the directory name, lowercase, a-z 0-9 -
 version = "0.1.0"                # the agent's own semver
 tier = "community"               # "official" or "community" ("example" is never published)
+author = "Your Name"             # who wrote it; the project's own name means first-party
 script = "agent.sh"              # file in this directory
 schedule = "none"                # "fixed", "configurable" or "none"
 default_schedule = ""            # five cron fields, required unless schedule = "none"

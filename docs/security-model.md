@@ -21,6 +21,24 @@ ends.
   must be read and approved by an owner, and `community` agents need one more
   approval per server.
 
+## Who made an agent
+
+Every agent names its `author` in its manifest. When the author is the project's
+own name, `Website Control Panel`, the agent is first-party. Any other author is
+third-party. The panel shows the author on every agent, a "First-party" badge for
+the project's own, and a visible warning, "Reviewed, but 3rd party", for the rest.
+
+The tag is not enforced by code. The maintainers verify it during pull request
+review: every new agent is read by an owner before it is merged, and agents are
+added rarely. A third party who writes `Website Control Panel` as the author of
+their own agent is caught in that review, the same review that decides whether
+the script is safe to publish at all. The checker only makes sure an author is
+present and well-formed, and an agent without one cannot be released.
+
+The label is information for the operator. It does not replace the approval of
+a `community` agent and does not make a third-party script safe. If a wrong
+first-party author is ever released, fix the manifest and publish a new release.
+
 ## What the engine checks on install
 
 Before anything is written, the engine verifies all of this:
