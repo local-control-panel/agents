@@ -45,6 +45,7 @@ default_schedule = "{schedule}"
 min_engine = "{min_engine}"
 description = "{description}"
 paths = ["/root/.wcp/agents", "/root/.wcp/logs"]
+requires_helpers = ["result"]
 '''
 
 # Both templates keep the contract: the heartbeat on every exit, the lock, work
@@ -95,19 +96,19 @@ PY
 '''
 
 # Stands in for ops-engine during `run` when no real binary is given: it
-# implements `agent heartbeat|lock|log|result|config|site|version` as the engine
+# implements `agent heartbeat|lock|log|result|config|site|tool|version` as the engine
 # documents them (same files, exit codes and dry-run rule), answers
 # `capabilities`, and records every call. Keep it in step with operations-engine
 # docs/agent-helpers.md.
 ENGINE_STUB = r"""#!/usr/bin/env python3
-import fcntl, json, os, re, stat, sys, time
+import fcntl, json, os, re, stat, subprocess, sys, time
 
 args = sys.argv[1:]
 with open(os.environ["WCP_STUB_CALLS"], "a") as calls:
     calls.write(" ".join(args) + "\n")
 wcp = os.environ.get("WCP_DIR", "/root/.wcp")
 dry = os.environ.get("WCP_DRY_RUN") == "1"
-HELPERS = ["heartbeat", "lock", "log", "result", "config", "site", "version"]
+HELPERS = ["heartbeat", "lock", "log", "result", "config", "site", "version", "tool"]
 SECRET_WORDS = ("password", "passwd", "secret", "token", "apikey", "api_key", "credential", "private_key")
 
 
@@ -181,6 +182,52 @@ def conf_values(name):
             sys.exit(1)
         values[key] = value
     return values
+
+
+INSTALLERS = {"wp-cli": "tool.install", "rclone": "backup.installRclone", "docker": "system.installDocker"}
+
+
+def tool_state(tool):
+    state = {"tool": tool, "present": False, "version": None, "path": None, "installer": INSTALLERS[tool]}
+    if tool == "wp-cli":
+        base = os.environ.get("WCP_TOOLS_DIR") or "/var/lib/wcp/tools"
+        current = os.path.join(base, "wp-cli", "current")
+        try:
+            version = os.readlink(current)
+        except OSError:
+            return state
+        phar = os.path.join(current, "wp.phar")
+        if version and "/" not in version and not version.startswith(".") and os.path.isfile(phar):
+            state.update(present=True, version=version, path=phar)
+        return state
+    dirs = (os.environ.get("WCP_TOOL_BIN_DIRS") or "").split(":") if os.environ.get("WCP_TOOL_BIN_DIRS") else (
+        ["/usr/bin", "/usr/local/bin", "/bin", "/snap/bin"])
+    for directory in dirs:
+        path = os.path.join(directory, tool)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            state.update(present=True, path=path)
+            try:
+                out = subprocess.run([path, "version" if tool == "rclone" else "--version"],
+                                     capture_output=True, text=True, timeout=10).stdout.splitlines()
+                word = out[0].split()[1 if tool == "rclone" else 2].rstrip(",") if out else ""
+                word = word[1:] if word.startswith("v") else word
+                if re.fullmatch(r"[A-Za-z0-9.+_:~-]{1,64}", word):
+                    state["version"] = word
+            except (OSError, IndexError, subprocess.SubprocessError):
+                pass
+            break
+    return state
+
+
+def tool_allowed(tool):
+    path = os.path.join(wcp, "allow-tool-ensure")
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            return False
+        return tool in [line.strip() for line in open(path).read().splitlines()]
+    except OSError:
+        return False
 
 
 def sites():
@@ -306,6 +353,34 @@ elif args[:3] == ["agent", "site", "list"]:
         envelope("agent.site.list", {"sites": found})
     elif found:
         print("\n".join(site["domain"] for site in found))
+elif args[:3] in (["agent", "tool", "status"], ["agent", "tool", "ensure"]):
+    rest = args[3:]
+    as_json = flag(rest, "--json")
+    tool = rest[0] if rest else ""
+    if tool not in ("wp-cli", "rclone", "docker"):
+        usage("tool must be one of wp-cli, rclone, docker")
+    state = tool_state(tool)
+    if args[2] == "status":
+        if as_json:
+            envelope("agent.tool.status", state)
+        elif state["present"] and state["version"]:
+            print(state["version"])
+        sys.exit(0 if state["present"] else 1)
+    allowed = tool_allowed(tool)
+    outcome = "present" if state["present"] else ("wouldInstall" if allowed and dry else "notAllowed")
+    if (not state["present"] and allowed and not dry) or outcome == "notAllowed":
+        message = ("the stub engine installs nothing" if allowed else
+                   "%s is missing and the operator has not allowed installing it" % tool)
+        if as_json:
+            print(json.dumps({"protocolVersion": 1, "operation": "agent.tool.ensure", "ok": False,
+                              "result": None, "warnings": [],
+                              "error": {"code": "DEPENDENCY_UNAVAILABLE", "message": message}},
+                             separators=(",", ":")))
+        print("agent.tool.ensure: " + message, file=sys.stderr)
+        sys.exit(1)
+    if as_json:
+        envelope("agent.tool.ensure", {"tool": tool, "outcome": outcome, "dryRun": dry,
+                                       "allowed": allowed, "state": state})
 elif args[:2] == ["agent", "version"]:
     if "--json" in args:
         envelope("agent.version", {"helperApi": 1, "helpers": HELPERS, "engineVersion": "stub"})

@@ -228,7 +228,8 @@ class StubEngine(unittest.TestCase):
     def call(self, kind, *args, dry=False, env_extra=None):
         wcp = self.dir / kind
         env = dict(os.environ, WCP_DIR=str(wcp), WCP_STUB_CALLS=str(self.dir / "calls"),
-                   WCP_SITES_MANIFEST_DIR=str(self.dir / "manifests"), SITES_ROOT=str(self.dir / "www"))
+                   WCP_SITES_MANIFEST_DIR=str(self.dir / "manifests"), SITES_ROOT=str(self.dir / "www"),
+                   WCP_TOOL_BIN_DIRS=str(self.dir / "bin"), WCP_TOOLS_DIR=str(self.dir / "tools"))
         env.pop("WCP_DRY_RUN", None)
         if dry:
             env["WCP_DRY_RUN"] = "1"
@@ -308,7 +309,56 @@ class StubEngine(unittest.TestCase):
             self.assertNotIn("repository", sites[0])
             lines = self.call(kind, "agent", "version").stdout.splitlines()
             self.assertEqual(lines[0], "agent-helpers 1")
-            self.assertEqual(lines[1:], ["heartbeat", "lock", "log", "result", "config", "site", "version"])
+            self.assertEqual(lines[1:], ["heartbeat", "lock", "log", "result", "config", "site", "version", "tool"])
+
+    def fake_bin(self, name, body):
+        (self.dir / "bin").mkdir(exist_ok=True)
+        path = self.dir / "bin" / name
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(0o755)
+
+    def test_tool_status(self):
+        for kind in self.each():
+            status = lambda *a: self.call(kind, "agent", "tool", "status", *a)  # noqa: E731
+            missing = status("rclone")
+            self.assertEqual((missing.returncode, missing.stdout), (1, ""))
+            self.fake_bin("rclone", "echo 'rclone v1.75.1'; echo more")
+            self.fake_bin("docker", "echo 'Docker version 27.3.1, build abc'")
+            self.assertEqual(status("rclone").stdout, "1.75.1\n")
+            self.assertEqual(status("docker").stdout, "27.3.1\n")
+            info = json.loads(status("rclone", "--json").stdout)["result"]
+            self.assertEqual((info["present"], info["version"], info["installer"]),
+                             (True, "1.75.1", "backup.installRclone"))
+            absent = status("wp-cli", "--json")
+            self.assertEqual(absent.returncode, 1)
+            self.assertFalse(json.loads(absent.stdout)["result"]["present"])
+            for bad in ("curl", "../rclone", "RCLONE"):
+                self.assertEqual(status(bad).returncode, 2, bad)
+            (self.dir / "bin" / "rclone").unlink()
+            (self.dir / "bin" / "docker").unlink()
+
+    def test_tool_ensure_refuses_unless_allowed_and_dry_run_changes_nothing(self):
+        for kind in self.each():
+            ensure = lambda *a, **k: self.call(kind, "agent", "tool", "ensure", *a, **k)  # noqa: E731
+            self.assertEqual(ensure("rclone").returncode, 1)
+            refused = ensure("rclone", "--json")
+            self.assertEqual(json.loads(refused.stdout)["error"]["code"], "DEPENDENCY_UNAVAILABLE")
+            self.assertEqual(ensure("curl").returncode, 2)
+            agents = self.dir / kind
+            agents.mkdir(exist_ok=True)
+            allow = agents / "allow-tool-ensure"
+            allow.write_text("rclone\n")
+            allow.chmod(0o600)
+            dry = ensure("rclone", "--json", dry=True)
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            result = json.loads(dry.stdout)["result"]
+            self.assertEqual((result["outcome"], result["dryRun"], result["allowed"]), ("wouldInstall", True, True))
+            self.assertFalse((self.dir / "bin").exists() and any((self.dir / "bin").iterdir()))
+            self.assertEqual(ensure("docker", dry=True).returncode, 1)  # not listed
+            self.fake_bin("rclone", "echo 'rclone v1.0.0'")
+            present = json.loads(ensure("rclone", "--json").stdout)["result"]
+            self.assertEqual(present["outcome"], "present")
+            (self.dir / "bin" / "rclone").unlink()
 
     def test_the_scaffold_result_line_reaches_the_report(self):
         root = Path(tempfile.mkdtemp())
@@ -322,6 +372,61 @@ class StubEngine(unittest.TestCase):
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["result"]["status"], "ok")
         self.assertIsNone(dry["result"])
+
+
+class Requirements(unittest.TestCase):
+    META = {"version": "1.0.0", "name": "demo"}
+
+    def test_valid_requirements_pass(self):
+        meta = dict(self.META, requires_ops=["site.list", "version"], requires_helpers=["result", "tool"],
+                    requires_tools=["rclone", "docker", "wp-cli"])
+        self.assertEqual(check_agents.check_requires("demo", meta), [])
+        self.assertEqual(check_agents.check_requires("demo", self.META), [])
+
+    def test_bad_requirements_are_errors(self):
+        bad = [("requires_tools", ["jq"]), ("requires_tools", "rclone"), ("requires_tools", ["rclone", "rclone"]),
+               ("requires_helpers", ["nope"]), ("requires_ops", ["site list"]), ("requires_ops", [""]),
+               ("requires_ops", [1]), ("requires_ops", ["a"] * 2), ("requires_ops", [f"op{i}" for i in range(33)])]
+        for key, value in bad:
+            errors = check_agents.check_requires("demo", dict(self.META, **{key: value}))
+            self.assertEqual(len(errors), 1, (key, value))
+            self.assertIn(key, errors[0])
+
+    def test_a_helper_used_but_not_declared_is_an_error(self):
+        text = ('# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n"$OPS" agent result emit "$NAME" --status ok '
+                '--summary x\nsubprocess.run([ops, "agent", "tool", "status", "rclone"])\n')
+        errors = check_agents.check_script("demo", self.META, text)
+        self.assertEqual(len([e for e in errors if "requires_helpers" in e]), 2, errors)
+        declared = dict(self.META, requires_helpers=["result", "tool"])
+        self.assertEqual([e for e in check_agents.check_script("demo", declared, text)
+                          if "requires_helpers" in e], [])
+
+    def test_prose_and_the_implied_helpers_need_no_declaration(self):
+        text = ('# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n# see agent site list in the docs\n'
+                '"$OPS" agent log "$NAME" started\nexec "$OPS" agent lock "$NAME" -- bash "$0"\n'
+                'trap \'"$OPS" agent heartbeat "$NAME"\' EXIT\n')
+        errors = check_agents.check_script("demo", self.META, text)
+        self.assertEqual([e for e in errors if "requires_helpers" in e], [])
+
+    def test_scaffolds_declare_what_they_use_and_the_registry_carries_it(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        (root / "agents").mkdir()
+        with mock.patch.object(wcp_agent, "ROOT", root), contextlib.redirect_stdout(io.StringIO()):
+            for lang in ("bash", "python"):
+                self.assertEqual(wcp_agent.main(["new", f"demo-{lang}", "--lang", lang]), 0)
+                meta = __import__("tomllib").loads((root / "agents" / f"demo-{lang}" / "agent.toml").read_text())
+                self.assertEqual(meta["requires_helpers"], ["result"])
+        import build_registry
+        with mock.patch.object(build_registry, "ROOT", root):
+            (root / "agents" / "demo-bash" / "agent.toml").write_text(
+                (root / "agents" / "demo-bash" / "agent.toml").read_text().replace(
+                    'tier = "community"', 'tier = "official"') + 'requires_tools = ["rclone"]\nrequires_ops = ["site.list"]\n')
+            self.assertEqual(build_registry.main("1.0.0", "abc"), 0)
+        registry = json.loads((root / "registry.json").read_text())
+        entry = registry["agents"]["demo-bash"]
+        self.assertEqual((entry["requiresHelpers"], entry["requiresTools"], entry["requiresOps"]),
+                         (["result"], ["rclone"], ["site.list"]))
 
 
 class ImportCheck(unittest.TestCase):

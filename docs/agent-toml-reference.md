@@ -69,11 +69,33 @@ With `isolation = "systemd"` the schedule must not be `none`. See
 [Running under systemd](writing-agents.md#running-under-systemd) for what the
 sandbox does and does not do.
 
+## Optional fields: requirements
+
+The engine checks these when the agent is installed from the registry and
+refuses the install, before anything is written, if the server does not meet
+them. They are checked once, at install. Each is a list of at most 32 distinct
+names.
+
+| Field | Names | Notes |
+| --- | --- | --- |
+| `requires_ops` | Engine operations the agent calls, e.g. `site.list` | Checked against `capabilities.operations` |
+| `requires_helpers` | `ops-engine agent` groups the agent uses: `result`, `config`, `site`, `tool`, `version` (`heartbeat`, `lock` and `log` are implied) | Required: `check` fails when the script calls a group that is not listed |
+| `requires_tools` | `wp-cli`, `rclone`, `docker` | The tool must be installed now; the refusal says "install them first". The agent can install one itself with `ops-engine agent tool ensure NAME`, but only if the operator allowed it |
+
+```toml
+requires_helpers = ["result", "tool"]
+requires_tools = ["rclone"]
+requires_ops = ["site.list"]
+```
+
+An engine older than the one that checks these fields ignores them, so set
+`min_engine` to the release that does.
+
 ## What the published registry contains
 
 On release, `registry.json` records, per agent: `version`, `tier`, `author`, `schedule`,
-`defaultSchedule`, `minEngine`, `script`, `description`, `paths`, the isolation
-settings when present, and the SHA-256 of every file in the agent's directory.
+`defaultSchedule`, `minEngine`, `requiresOps`, `requiresHelpers`, `requiresTools`,
+`script`, `description`, `paths`, the isolation settings when present, and the SHA-256 of every file in the agent's directory.
 It also records the release tag, the commit and the list of revoked
 `{name, version}` pairs. These come straight from the tagged commit and are
 never typed by hand.

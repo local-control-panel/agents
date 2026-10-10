@@ -185,10 +185,13 @@ compatibility layer for agents already published: no new helper is added to it.
 | `agent result emit NAME --status ok\|warn\|fail\|skipped --summary TEXT [--data K=V]...` | Record what the run found: the result line the panel shows. Keys that look like secrets are refused; never put a secret in a summary |
 | `agent config get NAME KEY [--default V]`, `agent config list NAME` | Read the agent's own `agents/NAME.conf` (`KEY=VALUE`), instead of parsing files yourself |
 | `agent site list [--json]` | The sites on this server, one domain per line |
+| `agent tool status NAME`, `agent tool ensure NAME` | Is `wp-cli`, `rclone` or `docker` installed (exit 0 or 1, prints the version); `ensure` installs it only when the operator allowed that, never in a dry run. List what you use in `requires_tools` so the engine refuses the install when it is missing |
 | `agent version` | The helpers this engine has (also `capabilities`, `features.agentHelpers`) |
 
-They need an engine that has them: set `min_engine` accordingly (see the
-[Agent API](agent-api.md)). Under `WCP_DRY_RUN=1` the writing helpers write
+They need an engine that has them: set `min_engine` accordingly and list the
+groups you use beyond `heartbeat`, `lock` and `log` in `requires_helpers` (see
+the [Agent API](agent-api.md) and the
+[`agent.toml` reference](agent-toml-reference.md)). Under `WCP_DRY_RUN=1` the writing helpers write
 nothing. The engine puts `WCP_DIR`, `OPS_ENGINE` and a `PATH` with
 `/usr/local/bin` into the cron line or systemd unit of every agent it
 installs, so `"$OPS" agent ...` works under cron's minimal environment.
