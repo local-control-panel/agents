@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Validate every agents/*/agent.toml. Exit 1 on the first problem list."""
-import base64
 import re
 import sys
 import tomllib
@@ -22,12 +21,14 @@ ISOLATIONS = {"cron", "systemd"}
 # Mirrors the engine's agent_systemd::valid_writable_path: a path strictly below
 # one of these directories, made of plain components.
 SAFE_PATH = re.compile(r"^/(root/\.wcp|var/log|var/www|var/lib/wcp-agent)(/[A-Za-z0-9._-]+)+$")
-LIB_BLOB = re.compile(r"b64decode\('([A-Za-z0-9+/=]+)'\), _agent_lib\.__dict__")
+# The library is installed as a file next to the scripts; a script reaches it
+# through this path entry, never through an inlined copy.
+LIB_PATH = re.compile(r"^sys\.path\.insert\(0, .*agents.*\)$", re.M)
 REQUIRED = ["name", "version", "tier", "author", "script", "schedule", "default_schedule",
             "min_engine", "description", "paths"]
 
 
-def check(directory: Path, lib_text: str) -> list[str]:
+def check(directory: Path) -> list[str]:
     errors = []
     toml_path = directory / "agent.toml"
     if not toml_path.is_file():
@@ -89,32 +90,31 @@ def check(directory: Path, lib_text: str) -> list[str]:
             "paths below /root/.wcp, /var/log, /var/www or /var/lib/wcp-agent, using only A-Za-z0-9._-"
         )
     if script.is_file():
-        errors += check_script(directory.name, meta, script.read_text(), lib_text)
+        errors += check_script(directory.name, meta, script.read_text())
     return errors
 
 
-def check_script(name: str, meta: dict, text: str, lib_text: str) -> list[str]:
-    """The script header must agree with agent.toml, and a bundled copy of the
-    shared library must be the lib/ file. This replaces the pinned-digest test
-    the engine and the panel used to keep for the built-in agents."""
+def check_script(name: str, meta: dict, text: str) -> list[str]:
+    """The script header must agree with agent.toml, and the shared library is
+    imported from the installed file, never embedded in the script."""
     errors = []
     header = re.search(r"^# wcp-agent-version: (\S+)$", text, re.M)
     if not header or header.group(1) != meta["version"]:
         errors.append(f"{name}: '# wcp-agent-version' must equal version in agent.toml")
-    blobs = LIB_BLOB.findall(text)
-    if len(blobs) > 1:
-        errors.append(f"{name}: the library is embedded {len(blobs)} times")
-    if blobs and base64.b64decode(blobs[0]).decode() != lib_text:
-        errors.append(f"{name}: embedded library differs from lib/wcp_agent_lib.py (run scripts/bundle_lib.py)")
+    if "b64decode" in text:
+        errors.append(f"{name}: no base64 blobs; import wcp_agent_lib from the installed file")
+    if re.search(r"\bwcp_agent_lib\b", text) and not re.search(r"^from wcp_agent_lib import ", text, re.M):
+        errors.append(f"{name}: use 'from wcp_agent_lib import ...'")
+    if re.search(r"^from wcp_agent_lib import ", text, re.M) and not LIB_PATH.search(text):
+        errors.append(f"{name}: put the agents directory on sys.path before importing wcp_agent_lib")
     return errors
 
 
 def main() -> int:
     errors = []
-    lib_text = (ROOT / "lib" / "wcp_agent_lib.py").read_text()
     for directory in sorted((ROOT / "agents").iterdir()):
         if directory.is_dir():
-            errors += check(directory, lib_text)
+            errors += check(directory)
     for error in errors:
         print(error, file=sys.stderr)
     return 1 if errors else 0

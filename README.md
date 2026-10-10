@@ -38,8 +38,7 @@ agents/<name>/agent.toml        metadata (see below)
 agents/<name>/agent.sh|.py      the script
 lib/wcp_agent_lib.py            shared library; agents that need it embed a copy (see below)
 scripts/build_registry.py       generates registry.json (release workflow only)
-scripts/check_agents.py         validates metadata and bundled libraries (runs in CI)
-scripts/bundle_lib.py           re-embeds lib/wcp_agent_lib.py into the agents that carry it
+scripts/check_agents.py         validates metadata and library imports (runs in CI)
 tests/                          tests for the checker
 revoked.json                    [{"name": "...", "version": "x.y.z"}] versions the engine refuses
 ```
@@ -82,13 +81,18 @@ granted `/root/.wcp/agents` (for its heartbeat) can still overwrite sibling
 scripts there. None of the built-in agents opts in: they need Docker and broad
 access.
 
-### Bundled library
+### Shared library
 
-The built-in agents run Python from a heredoc, so they embed
-`lib/wcp_agent_lib.py` as a base64 blob. CI decodes it and fails when it differs
-from `lib/`; after editing the library run `scripts/bundle_lib.py` and bump the
-agents' versions. CI also requires `# wcp-agent-version:` in the script to equal
-`version` in `agent.toml`.
+`lib/wcp_agent_lib.py` is not embedded in the scripts. The engine writes it to
+`/root/.wcp/agents/` next to every agent it installs, and a script that needs
+it puts that directory on `sys.path` and uses `from wcp_agent_lib import ...`.
+CI rejects base64 blobs and an import without the `sys.path.insert` line, and
+requires `# wcp-agent-version:` in the script to equal `version` in
+`agent.toml`.
+
+The library is shared by all agents and installing any one of them rewrites the
+file, so a change to it must stay backward compatible. Bump the version of an
+agent whenever its own script changes after a release.
 
 The declared `paths` are documentation for the reviewer and the operator and
 are linted for obvious mismatches. They are **not a sandbox**.

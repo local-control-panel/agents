@@ -176,11 +176,6 @@ The library is shared by all agents and installing any agent rewrites the
 file, so helpers keep their behaviour. If you want zero coupling, do not use
 it: a plain Bash agent needs none of it.
 
-> The way the library reaches the script has changed recently. Older copies of
-> the built-in agents embed a base64 copy of the library; current engine builds
-> install the file next to the script and the scripts import it. Write new
-> agents against the installed file, as above.
-
 ## Running under systemd
 
 An agent may ask to run from a sandboxed systemd timer instead of cron:
