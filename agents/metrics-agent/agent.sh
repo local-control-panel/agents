@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wcp-agent: metrics-agent
-# wcp-agent-version: 1.1.0
+# wcp-agent-version: 1.1.1
 # wcp-agent-description: Collects system metrics every minute, rotating into monthly files (3-month retention)
 
 set -euo pipefail
@@ -8,6 +8,12 @@ set -euo pipefail
 WCP_DIR="${WCP_DIR:-/root/.wcp}"
 export WCP_DIR
 trap 'ec=$?; mkdir -p "$WCP_DIR/agents"; echo "{\"ts\":$(date +%s),\"exit_code\":$ec}" > "$WCP_DIR/agents/metrics-agent.heartbeat"' EXIT
+
+# A second start while one is running does nothing (same lock file as `ops-engine agent lock`).
+mkdir -p "$WCP_DIR/agents"
+exec 9>"$WCP_DIR/agents/metrics-agent.lock"
+flock -n 9 || exit 0
+
 METRICS_DIR="${METRICS_DIR:-$WCP_DIR/metrics}"
 export METRICS_DIR
 

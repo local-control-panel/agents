@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wcp-agent: resource-alert
-# wcp-agent-version: 1.0.0
+# wcp-agent-version: 1.0.1
 # wcp-agent-description: CPU/RAM/Disk threshold monitor - writes alerts to /root/.wcp/resource-alerts.jsonl
 
 set -euo pipefail
@@ -8,6 +8,11 @@ set -euo pipefail
 WCP_DIR="${WCP_DIR:-/root/.wcp}"
 export WCP_DIR
 trap 'ec=$?; mkdir -p "$WCP_DIR/agents"; echo "{\"ts\":$(date +%s),\"exit_code\":$ec}" > "$WCP_DIR/agents/resource-alert.heartbeat"' EXIT
+
+# A second start while one is running does nothing (same lock file as `ops-engine agent lock`).
+mkdir -p "$WCP_DIR/agents"
+exec 9>"$WCP_DIR/agents/resource-alert.lock"
+flock -n 9 || exit 0
 
 PROC_STAT="${PROC_STAT:-/proc/stat}"
 PROC_MEMINFO="${PROC_MEMINFO:-/proc/meminfo}"

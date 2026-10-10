@@ -140,6 +140,47 @@ class RealEngine(unittest.TestCase):
                 self.assertEqual(dry["logs"], {})
 
 
+class BuiltinLocks(unittest.TestCase):
+    """The five agents that used to run unlocked: a second start while the lock
+    is held exits 0 straight away and does no work."""
+    NAMES = ["bruteforce-guard", "cache-warmup", "error-log-digest", "metrics-agent", "resource-alert"]
+
+    def test_second_start_exits_0_and_does_nothing(self):
+        import fcntl
+        import shutil
+        import subprocess
+        for name in self.NAMES:
+            with self.subTest(agent=name):
+                scratch = Path(tempfile.mkdtemp())
+                self.addCleanup(shutil.rmtree, scratch, True)
+                (scratch / "agents").mkdir()
+                env = dict(os.environ, WCP_DIR=str(scratch), SITES_ROOT=str(scratch / "sites"),
+                           METRICS_DIR=str(scratch / "metrics"))
+                if shutil.which("flock") is None:  # macOS
+                    shim = scratch / "bin" / "flock"
+                    shim.parent.mkdir()
+                    shim.write_text(wcp_agent.FLOCK_SHIM)
+                    shim.chmod(0o755)
+                    env["PATH"] = f"{shim.parent}{os.pathsep}{env['PATH']}"
+                with open(scratch / "agents" / f"{name}.lock", "w") as held:
+                    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    done = subprocess.run(["bash", str(ROOT / "agents" / name / "agent.sh")], env=env,
+                                          stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                          timeout=30)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                beat = json.loads((scratch / "agents" / f"{name}.heartbeat").read_text())
+                self.assertEqual(beat["exit_code"], 0)
+                written = sorted(str(f.relative_to(scratch)) for f in scratch.rglob("*")
+                                 if f.is_file() and f.parent.name != "bin")
+                self.assertEqual(written, [f"agents/{name}.heartbeat", f"agents/{name}.lock"])
+
+    def test_no_agent_is_left_without_a_lock(self):
+        for directory in sorted((ROOT / "agents").iterdir()):
+            text = (directory / "agent.sh").read_text()
+            self.assertEqual(check_agents.check(directory), [], directory.name)
+            self.assertEqual(check_agents.advise(directory.name, text), [], directory.name)
+
+
 class Library(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

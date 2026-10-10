@@ -230,10 +230,11 @@ change only together with it.
    without them (usage error, exit 2, repeated every run). `min_engine` is the
    gate, and the scaffold sets it; until the engine release exists, publish no
    agent that uses the helpers.
-2. **Five built-in agents take no lock** (`bruteforce-guard`, `cache-warmup`,
-   `error-log-digest`, `metrics-agent`, `resource-alert`) although the contract
-   says so; `check_agents.py` warns. Moving them to `agent lock` is a version
-   bump of scripts that run every minute and belongs to a separate change.
+2. **Five built-in agents took no lock** (`bruteforce-guard`, `cache-warmup`,
+   `error-log-digest`, `metrics-agent`, `resource-alert`). Fixed with the plain
+   `exec 9>`/`flock -n 9` form (a patch version bump each), which uses the same
+   lock file as `agent lock`; `check_agents.py` now treats a missing lock as an
+   error. They can move to `agent lock` once an engine release has it.
 3. **Minimal `PATH`.** Cron does not have `/usr/local/bin`; scripts use
    `OPS_ENGINE` with the absolute default, and E8 makes the engine export it.
 4. **The dry run is cooperative.** It is honoured by the helpers and by agents
@@ -292,7 +293,7 @@ Panel (`website-control-panel`):
 | --- | --- | --- | --- |
 | 1 (done) | Developer CLI, scaffolds, checker improvements, tests, docs | agents | nothing |
 | 2a (done) | `agent heartbeat`, `lock`, `log`; scaffolds and the runner use them; this design | engine, agents | phase 1 |
-| 2b | `result emit`, `config get\|list`, `site list`, discovery; `requires_*` enforced; compat library frozen and its phase 1 additions removed; engine release that names `min_engine`; fix the five agents' missing lock | engine, agents | 2a released |
+| 2b | `result emit`, `config get\|list`, `site list`, discovery; `requires_*` enforced; compat library frozen and its phase 1 additions removed; engine release that names `min_engine`; move the five agents' plain lock to `agent lock` | engine, agents | 2a released |
 | 3 | `tool status\|ensure`, E3, E6; P1 to P3 | engine, panel, agents | 2b |
 | 4 | `agent run` and dry run from the panel (E7), scenario `test`, optional Rust port of the developer CLI | all | 3 |
 

@@ -11,12 +11,15 @@ import check_agents  # noqa: E402
 FIRST_PARTY = "Website Control Panel"
 
 
+LOCK = 'exec 9>"$WCP_DIR/agents/demo.lock"\nflock -n 9 || exit 0\n'
+
+
 def bundled(version="1.0.0", name="demo"):
     return (
         f"#!/usr/bin/env bash\n# wcp-agent: {name}\n# wcp-agent-version: {version}\n"
         "python3 - <<'PY'\nimport os, sys\nsys.path.insert(0, os.path.join(WCP_DIR, \"agents\"))\n"
         "from wcp_agent_lib import run\nPY\n"
-    )
+    ) + LOCK
 
 
 def agent(script, version="1.0.0", extra="", author='author = "Ada Example"\n'):
@@ -50,8 +53,19 @@ class Library(unittest.TestCase):
         self.assertTrue(any("wcp-agent-version" in e for e in errors), errors)
 
     def test_a_script_without_the_library_is_fine(self):
-        script = "#!/usr/bin/env bash\n# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n"
+        script = "#!/usr/bin/env bash\n# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n" + LOCK
         self.assertEqual(check_agents.check(agent(script)), [])
+
+    def test_a_script_without_a_lock_fails(self):
+        script = "#!/usr/bin/env bash\n# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n"
+        errors = check_agents.check(agent(script))
+        self.assertTrue(any("rule 4" in e for e in errors), errors)
+
+    def test_each_lock_form_counts(self):
+        head = "#!/usr/bin/env bash\n# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n"
+        for lock in ('exec "$OPS" agent lock demo -- bash "$0"\n',
+                     "fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"):
+            self.assertEqual(check_agents.check(agent(head + lock)), [], lock)
 
 
 class Isolation(unittest.TestCase):
