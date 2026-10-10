@@ -42,6 +42,7 @@ def main(tag: str, commit: str) -> int:
             "requiresOps": meta.get("requires_ops", []),
             "requiresHelpers": meta.get("requires_helpers", []),
             "requiresTools": meta.get("requires_tools", []),
+            "configKeys": meta.get("config_keys", []),
             "script": meta["script"],
             "description": meta["description"],
             "paths": meta["paths"],

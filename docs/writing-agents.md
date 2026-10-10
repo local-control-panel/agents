@@ -173,7 +173,7 @@ longer than its interval silently skips runs.
 ## Helper commands and the shared Python library
 
 Shared behaviour for Bash and Python agents is an `ops-engine agent <sub>`
-command (`heartbeat`, `lock`, `log`, `result`, `config`, `site`, `version`),
+command (`heartbeat`, `lock`, `log`, `result`, `config`, `site`, `tool`, `version`),
 described in [Agent API](agent-api.md). The Python library below is a frozen
 compatibility layer for agents already published: no new helper is added to it.
 
@@ -183,7 +183,7 @@ compatibility layer for agents already published: no new helper is added to it.
 | `agent lock NAME -- CMD...` | Run CMD under the agent's lock |
 | `agent log NAME [--level L] MSG...` | Append a bounded JSON log line |
 | `agent result emit NAME --status ok\|warn\|fail\|skipped --summary TEXT [--data K=V]...` | Record what the run found: the result line the panel shows. Keys that look like secrets are refused; never put a secret in a summary |
-| `agent config get NAME KEY [--default V]`, `agent config list NAME` | Read the agent's own `agents/NAME.conf` (`KEY=VALUE`), instead of parsing files yourself |
+| `agent config get NAME KEY [--default V]`, `agent config list NAME` | Read the agent's own `agents/NAME.conf` (`KEY=VALUE`), instead of parsing files yourself. List the keys in `config_keys`. The operator's values arrive through the engine's `agent.configure`; try them with `wcp_agent.py run NAME --config KEY=VALUE` |
 | `agent site list [--json]` | The sites on this server, one domain per line |
 | `agent tool status NAME`, `agent tool ensure NAME` | Is `wp-cli`, `rclone` or `docker` installed (exit 0 or 1, prints the version); `ensure` installs it only when the operator allowed that, never in a dry run. List what you use in `requires_tools` so the engine refuses the install when it is missing |
 | `agent version` | The helpers this engine has (also `capabilities`, `features.agentHelpers`) |
