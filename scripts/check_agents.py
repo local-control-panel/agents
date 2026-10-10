@@ -11,15 +11,19 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 CRON = re.compile(r"^(@(hourly|daily|weekly|monthly|yearly)|([^\s]+\s+){4}[^\s]+)$")
 TIERS = {"official", "community", "example"}
-# Left out means third-party. Owners check a "first-party" claim in review.
-ORIGINS = {"first-party", "third-party"}
+# An agent whose author is exactly this name is first-party. Any other author
+# is third-party. The engine and the panel hold the same constant. The checker
+# cannot tell who really wrote an agent: the maintainers verify the name when
+# they review the pull request that adds it.
+FIRST_PARTY_AUTHORS = {"Website Control Panel"}
+AUTHOR_MAX = 100
 SCHEDULES = {"fixed", "configurable", "none"}
 ISOLATIONS = {"cron", "systemd"}
 # Mirrors the engine's agent_systemd::valid_writable_path: a path strictly below
 # one of these directories, made of plain components.
 SAFE_PATH = re.compile(r"^/(root/\.wcp|var/log|var/www|var/lib/wcp-agent)(/[A-Za-z0-9._-]+)+$")
 LIB_BLOB = re.compile(r"b64decode\('([A-Za-z0-9+/=]+)'\), _agent_lib\.__dict__")
-REQUIRED = ["name", "version", "tier", "script", "schedule", "default_schedule",
+REQUIRED = ["name", "version", "tier", "author", "script", "schedule", "default_schedule",
             "min_engine", "description", "paths"]
 
 
@@ -34,8 +38,18 @@ def check(directory: Path, lib_text: str) -> list[str]:
             errors.append(f"{directory.name}: missing key {key}")
     if errors:
         return errors
-    if meta.get("origin", "third-party") not in ORIGINS:
-        errors.append(f"{directory.name}: origin must be one of {sorted(ORIGINS)} (or left out)")
+    author = meta.get("author")
+    if (
+        not isinstance(author, str)
+        or not author
+        or author != author.strip()
+        or len(author) > AUTHOR_MAX
+        or any(ord(c) < 32 or ord(c) == 127 for c in author)
+    ):
+        errors.append(
+            f"{directory.name}: author must be a non-empty name of at most {AUTHOR_MAX} "
+            "characters, without surrounding spaces or control characters"
+        )
     if meta["name"] != directory.name or not NAME.match(meta["name"]):
         errors.append(f"{directory.name}: name must equal the directory and match a-z0-9-")
     for key in ("version", "min_engine"):

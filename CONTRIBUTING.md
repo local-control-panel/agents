@@ -8,8 +8,9 @@
    Small, readable scripts are reviewed faster.
 
 New agents start as `tier = "community"`. Only owners can mark one `official`.
-An agent you contribute is `third-party`: leave `origin` out or set
-`origin = "third-party"`. The panel tells operators that it was reviewed by the
-maintainers but is not made by them. A pull request that claims
-`origin = "first-party"` for an agent the maintainers did not write will not be merged.
+Put your own name in `author`. An agent is first-party only when its author is
+`Website Control Panel`, which is for agents the maintainers wrote; a pull
+request that uses that name for someone else's agent will not be merged. Every other
+author is third-party, and the panel tells operators the agent was reviewed by
+the maintainers but is not made by them.
 By contributing you agree your work is licensed under Apache-2.0.

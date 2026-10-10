@@ -1,7 +1,7 @@
 name = "bruteforce-guard"
 version = "2.0.0"
 tier = "official"
-origin = "first-party"
+author = "Website Control Panel"
 script = "agent.sh"
 schedule = "fixed"
 default_schedule = "* * * * *"

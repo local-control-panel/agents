@@ -1,7 +1,7 @@
 name = "error-log-digest"
 version = "1.0.0"
 tier = "official"
-origin = "first-party"
+author = "Website Control Panel"
 script = "agent.sh"
 schedule = "configurable"
 default_schedule = "0 8 * * *"

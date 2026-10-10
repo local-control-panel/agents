@@ -252,9 +252,10 @@ agent has been merged and released.
 
 1. **You open a pull request** that adds `agents/<name>/`. Explain what the
    agent does and why it needs each path. New agents start as
-   `tier = "community"`. Only owners can mark one `official`. Leave `origin`
-   out (or set `third-party`). `first-party` is for agents the maintainers wrote,
-   and a pull request that claims it for someone else's agent is not merged.
+   `tier = "community"`. Only owners can mark one `official`. Put
+   your own name in `author`. `Website Control Panel` is reserved for agents the
+   maintainers wrote, and a pull request that uses it for someone else's agent is
+   not merged.
 2. **CI** validates `agent.toml`, runs ShellCheck and checks that the registry
    builds.
 3. **An owner reviews and merges.** Everything needs owner approval, including

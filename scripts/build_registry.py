@@ -33,7 +33,7 @@ def main(tag: str, commit: str) -> int:
         agents[meta["name"]] = {
             "version": meta["version"],
             "tier": meta["tier"],
-            "origin": meta.get("origin", "third-party"),
+            "author": meta["author"],
             "schedule": meta["schedule"],
             "defaultSchedule": meta["default_schedule"],
             "isolation": meta.get("isolation", "cron"),
