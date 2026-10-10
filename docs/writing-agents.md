@@ -207,6 +207,11 @@ Of the agents in this repository, only `disk-usage-report` uses systemd.
 
 ## Test it before you open a pull request
 
+The quickest way is the developer CLI (see [Agent API and commands](agent-api.md)):
+`python3 scripts/wcp_agent.py run my-agent --dry-run` installs the agent into a
+scratch directory with a stub engine, runs it twice (the second time with the
+lock held) and checks the heartbeat. The manual steps below show what it does.
+
 The built-in agents honour `WCP_DIR`, and several honour other overrides such as
 `SITES_ROOT`. Do the same, and you can run your agent against a scratch
 directory without touching a real server:
