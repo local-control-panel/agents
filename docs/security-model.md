@@ -23,17 +23,21 @@ ends.
 
 ## Who made an agent
 
-Every agent in the registry carries an `origin`. `first-party` means the
-maintainers wrote it; `third-party` means it was contributed and reviewed, but not
-written by them. The panel shows a badge for the first and a visible warning for
-the second ("reviewed, but third-party").
+Every agent can carry an `origin` in its manifest: `first-party` means the
+maintainers wrote it; anything else, including no `origin` at all, means
+third-party. The panel shows a badge for the first and a visible warning for the
+second ("Reviewed, but 3rd party").
 
-The label is only worth something if it cannot be forged, so it is not read from
-the agent. The release workflow derives it from `first-party.json`, a file that
-needs an owner's approval to change, and writes it into `registry.json` together
-with the hashes. A missing or unknown `origin` is treated as `third-party`. The
-label is information for the operator; it does not replace the approval of a
-`community` agent and does not make a third-party script safe.
+The tag is not enforced by code. The maintainers verify it during pull request
+review: every new agent is read by an owner before it is merged, and agents are
+added rarely. A third party who writes `origin = "first-party"` for their own
+agent is caught in that review, the same review that decides whether the script
+is safe to publish at all. The checker only makes sure the value is one of the
+two known ones.
+
+The label is information for the operator. It does not replace the approval of
+a `community` agent and does not make a third-party script safe. If a wrong
+`first-party` tag is ever released, fix the manifest and publish a new release.
 
 ## What the engine checks on install
 

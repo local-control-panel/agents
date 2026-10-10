@@ -17,16 +17,7 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def first_party() -> set[str]:
-    """Agents made by the maintainers. The origin of an agent is decided here,
-    never by the agent's own agent.toml, so a contributor cannot claim it."""
-    names = json.loads((ROOT / "first-party.json").read_text())
-    assert isinstance(names, list) and all(isinstance(n, str) for n in names), "bad first-party.json"
-    return set(names)
-
-
 def main(tag: str, commit: str) -> int:
-    ours = first_party()
     agents = {}
     for directory in sorted((ROOT / "agents").iterdir()):
         if not directory.is_dir():
@@ -42,7 +33,7 @@ def main(tag: str, commit: str) -> int:
         agents[meta["name"]] = {
             "version": meta["version"],
             "tier": meta["tier"],
-            "origin": "first-party" if meta["name"] in ours else "third-party",
+            "origin": meta.get("origin", "third-party"),
             "schedule": meta["schedule"],
             "defaultSchedule": meta["default_schedule"],
             "isolation": meta.get("isolation", "cron"),

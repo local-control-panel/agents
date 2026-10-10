@@ -23,10 +23,11 @@ docs repository, `operations-engine/design/agent-registry.md`).
   it), checks every file against `registry.json`, and installs through its
   existing atomic pipeline.
 - A `community` agent additionally needs an operator to approve its exact hash.
-- Every agent in the registry carries an `origin`: `first-party` if the maintainers
-  wrote it, `third-party` otherwise. The release workflow stamps it from
-  `first-party.json`, never from the agent's own `agent.toml`. The panel shows the
-  difference, and warns that a third-party agent was reviewed but is not ours.
+- Every agent has an `origin` in its `agent.toml`: `first-party` if the maintainers
+  wrote it, otherwise `third-party` (or nothing, which means the same). The
+  maintainers check the tag in the pull request that adds the agent. The panel
+  shows a badge for first-party agents and a warning, "Reviewed, but 3rd party",
+  for all others.
 - A version listed in `revoked` is refused for new installs; installed copies
   only produce a warning in the panel.
 

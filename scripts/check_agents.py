@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Validate every agents/*/agent.toml. Exit 1 on the first problem list."""
 import base64
-import json
 import re
 import sys
 import tomllib
@@ -12,6 +11,8 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 CRON = re.compile(r"^(@(hourly|daily|weekly|monthly|yearly)|([^\s]+\s+){4}[^\s]+)$")
 TIERS = {"official", "community", "example"}
+# Left out means third-party. Owners check a "first-party" claim in review.
+ORIGINS = {"first-party", "third-party"}
 SCHEDULES = {"fixed", "configurable", "none"}
 ISOLATIONS = {"cron", "systemd"}
 # Mirrors the engine's agent_systemd::valid_writable_path: a path strictly below
@@ -33,8 +34,8 @@ def check(directory: Path, lib_text: str) -> list[str]:
             errors.append(f"{directory.name}: missing key {key}")
     if errors:
         return errors
-    if "origin" in meta:
-        errors.append(f"{directory.name}: origin is set by first-party.json, not by agent.toml")
+    if meta.get("origin", "third-party") not in ORIGINS:
+        errors.append(f"{directory.name}: origin must be one of {sorted(ORIGINS)} (or left out)")
     if meta["name"] != directory.name or not NAME.match(meta["name"]):
         errors.append(f"{directory.name}: name must equal the directory and match a-z0-9-")
     for key in ("version", "min_engine"):
@@ -94,33 +95,12 @@ def check_script(name: str, meta: dict, text: str, lib_text: str) -> list[str]:
     return errors
 
 
-def check_first_party(directories: set[str]) -> list[str]:
-    """first-party.json lists agent directories, nothing else. An agent cannot
-    declare its own origin: the key is refused in agent.toml."""
-    path = ROOT / "first-party.json"
-    if not path.is_file():
-        return ["first-party.json missing"]
-    try:
-        names = json.loads(path.read_text())
-    except json.JSONDecodeError:
-        return ["first-party.json is not valid JSON"]
-    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-        return ["first-party.json must be a list of agent names"]
-    errors = [f"first-party.json: {n} is not an agent directory" for n in names if n not in directories]
-    if len(set(names)) != len(names):
-        errors.append("first-party.json lists a name twice")
-    if "example" in names:
-        errors.append("first-party.json: the example template is never published")
-    return errors
-
-
 def main() -> int:
     errors = []
     lib_text = (ROOT / "lib" / "wcp_agent_lib.py").read_text()
-    directories = sorted(d for d in (ROOT / "agents").iterdir() if d.is_dir())
-    for directory in directories:
-        errors += check(directory, lib_text)
-    errors += check_first_party({d.name for d in directories})
+    for directory in sorted((ROOT / "agents").iterdir()):
+        if directory.is_dir():
+            errors += check(directory, lib_text)
     for error in errors:
         print(error, file=sys.stderr)
     return 1 if errors else 0

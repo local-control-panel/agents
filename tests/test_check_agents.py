@@ -84,14 +84,15 @@ if __name__ == "__main__":
 
 
 class Origin(unittest.TestCase):
-    def test_an_agent_cannot_declare_its_own_origin(self):
-        errors = check_agents.check(agent(bundled(), extra='origin = "first-party"\n'), LIB)
-        self.assertTrue(any("origin is set by first-party.json" in e for e in errors), errors)
+    def test_a_known_origin_passes(self):
+        for value in ("first-party", "third-party"):
+            self.assertEqual(
+                check_agents.check(agent(bundled(), extra=f'origin = "{value}"\n'), LIB), [], value
+            )
 
-    def test_first_party_names_must_be_agent_directories(self):
-        errors = check_agents.check_first_party({"real"})
-        self.assertTrue(any("is not an agent directory" in e for e in errors), errors)
+    def test_no_origin_means_third_party_and_passes(self):
+        self.assertEqual(check_agents.check(agent(bundled()), LIB), [])
 
-    def test_the_repository_allowlist_is_valid(self):
-        directories = {p.name for p in (ROOT / "agents").iterdir() if p.is_dir()}
-        self.assertEqual(check_agents.check_first_party(directories), [])
+    def test_any_other_origin_value_fails(self):
+        errors = check_agents.check(agent(bundled(), extra='origin = "official"\n'), LIB)
+        self.assertTrue(any("origin must be one of" in e for e in errors), errors)

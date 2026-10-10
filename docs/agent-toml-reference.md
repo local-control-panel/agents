@@ -24,6 +24,7 @@ writable_paths = ["/root/.wcp/agents", "/root/.wcp/logs"]
 | --- | --- | --- |
 | `name` | string | Equals the directory name. Lowercase letters, digits and `-`; starts with a letter or digit; at most 64 characters. Cannot be the name of a built-in agent when installing through the registry |
 | `version` | string | The agent's own version, `x.y.z` (digits only). Raise it for every change to the script. The script header `# wcp-agent-version:` must match |
+| `origin` | string | Optional. `first-party` or `third-party`; missing means `third-party`. See [Origin](#origin) |
 | `tier` | string | `official`, `community`, or `example`. New agents use `community`; only owners set `official`. `example` marks the template and is never published |
 | `script` | string | File name of the script inside the agent's directory (a plain name, no `/`, not starting with `.`) |
 | `schedule` | string | `fixed`, `configurable` or `none`. See below |
@@ -78,21 +79,22 @@ never typed by hand.
 
 ## Origin
 
-`origin` tells operators who made an agent. It is **not** a field of
-`agent.toml`, and `check_agents.py` rejects it there: an author must not be able
-to claim to be the maintainers.
+`origin` says who made an agent. It is optional.
 
 | Value | Meaning |
 | --- | --- |
-| `first-party` | The agent's name is listed in `first-party.json` at the repository root |
-| `third-party` | Any other agent. It was reviewed and approved by an owner before release, but it was not written by the maintainers |
+| `first-party` | Written by the maintainers |
+| `third-party` | Anyone else. This is also what a missing `origin` means |
 
-The release workflow stamps `origin` into `registry.json` from the tagged
-commit, the same way it computes hashes. `first-party.json` is a JSON list of
-agent names, protected by `CODEOWNERS`, so adding a name needs an owner's review.
-It is independent of `tier`: `tier` decides whether an operator must approve the
-exact script, `origin` only says who wrote it. A registry without `origin`
-is read as `third-party`.
+Any other value fails `check_agents.py`. The checker cannot tell who wrote an
+agent, so it does not decide the tag; the maintainers do, in review. Every pull
+request that adds an agent is read by an owner, and a contributor who writes
+`first-party` for their own agent is caught there. `origin` goes into
+`registry.json` as published, and the panel shows a "First-party" badge for one
+value and the warning "Reviewed, but 3rd party" for everything else.
+
+`origin` is independent of `tier`. `tier` decides whether an operator must
+approve the exact script; `origin` only says who wrote it.
 
 ## Revoking a version
 
