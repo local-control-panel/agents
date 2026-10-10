@@ -252,7 +252,8 @@ agent has been merged and released.
 
 1. **You open a pull request** that adds `agents/<name>/`. Explain what the
    agent does and why it needs each path. New agents start as
-   `tier = "community"`. Only owners can mark one `official`.
+   `tier = "community"`. Only owners can mark one `official`. Your agent is
+   published as `third-party`; do not set `origin` yourself, it is refused.
 2. **CI** validates `agent.toml`, runs ShellCheck and checks that the registry
    builds.
 3. **An owner reviews and merges.** Everything needs owner approval, including

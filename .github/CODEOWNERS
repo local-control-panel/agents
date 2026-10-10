@@ -5,3 +5,6 @@
 /.github/workflows/        @MrGKanev
 /scripts/                  @MrGKanev
 /lib/                      @MrGKanev
+# Which agents count as made by us. build_registry.py stamps the registry from
+# this file, so changing it changes what the panel calls first-party.
+/first-party.json          @MrGKanev

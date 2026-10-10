@@ -21,6 +21,20 @@ ends.
   must be read and approved by an owner, and `community` agents need one more
   approval per server.
 
+## Who made an agent
+
+Every agent in the registry carries an `origin`. `first-party` means the
+maintainers wrote it; `third-party` means it was contributed and reviewed, but not
+written by them. The panel shows a badge for the first and a visible warning for
+the second ("reviewed, but third-party").
+
+The label is only worth something if it cannot be forged, so it is not read from
+the agent. The release workflow derives it from `first-party.json`, a file that
+needs an owner's approval to change, and writes it into `registry.json` together
+with the hashes. A missing or unknown `origin` is treated as `third-party`. The
+label is information for the operator; it does not replace the approval of a
+`community` agent and does not make a third-party script safe.
+
 ## What the engine checks on install
 
 Before anything is written, the engine verifies all of this:

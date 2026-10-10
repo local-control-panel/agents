@@ -8,4 +8,7 @@
    Small, readable scripts are reviewed faster.
 
 New agents start as `tier = "community"`. Only owners can mark one `official`.
+An agent you contribute is published as `third-party`: the panel tells operators
+that it was reviewed by the maintainers but is not made by them. Only owners can
+add a name to `first-party.json`, and `agent.toml` cannot set `origin`.
 By contributing you agree your work is licensed under Apache-2.0.

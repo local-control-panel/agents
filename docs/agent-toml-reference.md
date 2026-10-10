@@ -69,12 +69,30 @@ sandbox does and does not do.
 
 ## What the published registry contains
 
-On release, `registry.json` records, per agent: `version`, `tier`, `schedule`,
+On release, `registry.json` records, per agent: `version`, `tier`, `origin`, `schedule`,
 `defaultSchedule`, `minEngine`, `script`, `description`, `paths`, the isolation
 settings when present, and the SHA-256 of every file in the agent's directory.
 It also records the release tag, the commit and the list of revoked
 `{name, version}` pairs. These come straight from the tagged commit and are
 never typed by hand.
+
+## Origin
+
+`origin` tells operators who made an agent. It is **not** a field of
+`agent.toml`, and `check_agents.py` rejects it there: an author must not be able
+to claim to be the maintainers.
+
+| Value | Meaning |
+| --- | --- |
+| `first-party` | The agent's name is listed in `first-party.json` at the repository root |
+| `third-party` | Any other agent. It was reviewed and approved by an owner before release, but it was not written by the maintainers |
+
+The release workflow stamps `origin` into `registry.json` from the tagged
+commit, the same way it computes hashes. `first-party.json` is a JSON list of
+agent names, protected by `CODEOWNERS`, so adding a name needs an owner's review.
+It is independent of `tier`: `tier` decides whether an operator must approve the
+exact script, `origin` only says who wrote it. A registry without `origin`
+is read as `third-party`.
 
 ## Revoking a version
 
