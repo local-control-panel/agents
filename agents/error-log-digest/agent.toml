@@ -1,5 +1,5 @@
 name = "error-log-digest"
-version = "1.0.0"
+version = "1.0.1"
 tier = "official"
 author = "Website Control Panel"
 script = "agent.sh"

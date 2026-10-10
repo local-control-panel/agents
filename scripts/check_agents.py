@@ -112,6 +112,12 @@ def check_script(name: str, meta: dict, text: str) -> list[str]:
     header_name = re.search(r"^# wcp-agent: (\S+)$", text, re.M)
     if not header_name or header_name.group(1) != meta["name"]:
         errors.append(f"{name}: '# wcp-agent' must equal name in agent.toml")
+    # Contract rule 4: a second start while one runs must do nothing. Both the
+    # plain form (`flock -n 9`), the engine helper (`ops-engine agent lock`) and
+    # a non-blocking `fcntl.flock` in Python (the backup agents) all count. Every
+    # published agent has one, so it is an error.
+    if not re.search(r"^\s*flock -n \d+|\bagent\s+lock\b|\bfcntl\.flock\(.*LOCK_NB", text, re.M):
+        errors.append(f"{name}: no lock taken with 'flock -n' or 'ops-engine agent lock' (contract rule 4)")
     known = library_names()
     for imported in re.findall(r"^from wcp_agent_lib import (.+)$", text, re.M):
         for item in imported.split("#")[0].replace("(", "").replace(")", "").split(","):
@@ -125,12 +131,10 @@ def advise(name: str, text: str) -> list[str]:
     """Contract points that are not (yet) errors, because some agents already
     published do not meet them. New agents should."""
     notes = []
-    # Both the plain form (trap + flock -n) and the engine helpers
-    # (`ops-engine agent heartbeat|lock`, docs/agent-api.md) satisfy the contract.
+    # Both the plain form (trap) and the engine helper (`ops-engine agent
+    # heartbeat`, docs/agent-api.md) satisfy the contract.
     if "heartbeat" not in text:
         notes.append(f"{name}: no heartbeat written on exit (contract rule 3)")
-    if "flock" not in text and not re.search(r"agent\s+lock\b", text):
-        notes.append(f"{name}: no lock taken with flock -n or 'ops-engine agent lock' (contract rule 4)")
     return notes
 
 

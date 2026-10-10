@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wcp-agent: bruteforce-guard
-# wcp-agent-version: 2.0.0
+# wcp-agent-version: 2.0.1
 # wcp-agent-description: Fail2Ban-style brute-force protection for wp-login and general Caddy abuse. Bans in the ingress Caddy (a `remote_ip` block every route imports) instead of iptables, since containerized (Docker bridge + published-port) traffic is NAT'd through DOCKER-USER/FORWARD, not INPUT, so classic fail2ban bans never actually apply. The ban list is applied by the Operations Engine (`ingress.applyBans`), never by editing route files.
 #
 # Run modes:
@@ -17,6 +17,11 @@ set -euo pipefail
 WCP_DIR="${WCP_DIR:-/root/.wcp}"
 export WCP_DIR
 trap 'ec=$?; mkdir -p "$WCP_DIR/agents"; echo "{\"ts\":$(date +%s),\"exit_code\":$ec}" > "$WCP_DIR/agents/bruteforce-guard.heartbeat"' EXIT
+
+# A second start while one is running does nothing (same lock file as `ops-engine agent lock`).
+mkdir -p "$WCP_DIR/agents"
+exec 9>"$WCP_DIR/agents/bruteforce-guard.lock"
+flock -n 9 || exit 0
 
 LOG_GLOB="${LOG_GLOB:-/var/log/caddy/ingress-*.log}"
 export LOG_GLOB

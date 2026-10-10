@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wcp-agent: cache-warmup
-# wcp-agent-version: 1.0.0
+# wcp-agent-version: 1.0.1
 # wcp-agent-description: Pre-warms the full-page cache for every site by crawling its sitemap.xml (falls back to the homepage)
 #
 # Run modes:
@@ -13,6 +13,11 @@ WCP_DIR="${WCP_DIR:-/root/.wcp}"
 SITES_ROOT="${SITES_ROOT:-/var/www}"
 export WCP_DIR SITES_ROOT
 trap 'ec=$?; mkdir -p "$WCP_DIR/agents"; echo "{\"ts\":$(date +%s),\"exit_code\":$ec}" > "$WCP_DIR/agents/cache-warmup.heartbeat"' EXIT
+
+# A second start while one is running does nothing (same lock file as `ops-engine agent lock`).
+mkdir -p "$WCP_DIR/agents"
+exec 9>"$WCP_DIR/agents/cache-warmup.lock"
+flock -n 9 || exit 0
 
 domain_arg=""
 if [[ "${1:-}" == "--domain" ]]; then

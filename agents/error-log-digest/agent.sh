@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wcp-agent: error-log-digest
-# wcp-agent-version: 1.0.0
+# wcp-agent-version: 1.0.1
 # wcp-agent-description: Daily digest of grouped WordPress debug.log entries and Caddy 5xx responses across every site
 
 set -euo pipefail
@@ -9,6 +9,11 @@ WCP_DIR="${WCP_DIR:-/root/.wcp}"
 SITES_ROOT="${SITES_ROOT:-/var/www}"
 export WCP_DIR SITES_ROOT
 trap 'ec=$?; mkdir -p "$WCP_DIR/agents"; echo "{\"ts\":$(date +%s),\"exit_code\":$ec}" > "$WCP_DIR/agents/error-log-digest.heartbeat"' EXIT
+
+# A second start while one is running does nothing (same lock file as `ops-engine agent lock`).
+mkdir -p "$WCP_DIR/agents"
+exec 9>"$WCP_DIR/agents/error-log-digest.lock"
+flock -n 9 || exit 0
 
 python3 - << 'PYEOF'
 import glob, json, os, re, sys, time
