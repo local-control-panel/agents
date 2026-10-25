@@ -178,13 +178,16 @@ is not part of this contract. Never put credentials or content in `data`.
   --summary "Site needs attention" --data domain=shop.example.test
 ```
 
-For an agent checking several sites, the target format is one result per site,
-with that site's own status and `data.domain`, plus an optional server summary
-without a domain. **Current panel compatibility:** `agents:results` retains only
-the newest result per agent, so only that row contributes a site signal. Do not
-claim complete multi-site coverage until the reader retains the newest row per
-`(agent, domain)` (and a separate server row), and the Agents tab independently
-selects the newest row overall. Missing/truncated/expired coverage stays unknown.
+For an agent checking several sites, emit one result per site with that site's
+own status and `data.domain`, plus an optional server summary without a domain.
+The panel reader retains the newest row per `(agent, domain)` and a separate
+server row; the Agents tab selects the newest row overall. Log order breaks a
+tie when rows share a timestamp. Reads are bounded to the last 400 log lines per
+file and 256 KiB in total; an oversized read is refused rather than returned as
+a complete list. Missing or expired coverage stays unknown.
+
+Older panels retain only the newest result per agent and cannot show complete
+multi-site coverage. Agents must not use `data.domains` to work around this.
 
 ## 5. Developer commands (`python3 scripts/wcp_agent.py ...`)
 
