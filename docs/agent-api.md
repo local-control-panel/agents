@@ -165,6 +165,30 @@ root) can read all of them. New agents use one file each:
 The heartbeat says whether the agent ran; the result line says what it found.
 The panel needs only these two.
 
+#### Site identity in a result
+
+`data.domain` is the convention for a result about exactly one enrolled site.
+Use the domain returned by `agent site list`; no scheme, path or port. The panel
+matches after trimming and lower-casing. A result without `data.domain` is a
+server result; it must never be attached to a site by guessing. `data.domains`
+is not part of this contract. Never put credentials or content in `data`.
+
+```bash
+"$OPS" agent result emit "$NAME" --status warn \
+  --summary "Site needs attention" --data domain=shop.example.test
+```
+
+For an agent checking several sites, emit one result per site with that site's
+own status and `data.domain`, plus an optional server summary without a domain.
+The panel reader retains the newest row per `(agent, domain)` and a separate
+server row; the Agents tab selects the newest row overall. Log order breaks a
+tie when rows share a timestamp. Reads are bounded to the last 400 log lines per
+file and 256 KiB in total; an oversized read is refused rather than returned as
+a complete list. Missing or expired coverage stays unknown.
+
+Older panels retain only the newest result per agent and cannot show complete
+multi-site coverage. Agents must not use `data.domains` to work around this.
+
 ## 5. Developer commands (`python3 scripts/wcp_agent.py ...`)
 
 Unchanged in purpose; they never run on a server.
