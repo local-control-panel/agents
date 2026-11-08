@@ -157,7 +157,7 @@ _notify(
         "total_errors": total_errors,
         "top_groups": top,
     },
-    username="WCP Error Digest",
+    username="OrbDen Error Digest",
 )
 
 print(f"Error digest: {total_errors} grouped error(s)")

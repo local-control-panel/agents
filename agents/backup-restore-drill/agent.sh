@@ -121,6 +121,6 @@ except Exception as e:
 result["duration_s"] = int(time.time() - start)
 log_entry(str(WCP_DIR / "logs/restore-drill.log"), result)
 notify(str(WCP_DIR / "notify.conf"), is_failure=result["status"] != "ok", is_success=result["status"] == "ok",
-       summary_text=f"Restore drill: {result['status']}", event_payload=result, username="WCP Restore Drill")
+       summary_text=f"Restore drill: {result['status']}", event_payload=result, username="OrbDen Restore Drill")
 sys.exit(0 if result["status"] == "ok" else 1)
 PYEOF

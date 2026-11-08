@@ -1,7 +1,7 @@
 name = "resource-alert"
 version = "1.0.1"
 tier = "official"
-author = "Website Control Panel"
+author = "OrbDen"
 script = "agent.sh"
 schedule = "fixed"
 default_schedule = "*/5 * * * *"

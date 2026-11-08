@@ -118,7 +118,7 @@ Whether an agent is first-party is decided from this one string:
 
 | Author | Treated as |
 | --- | --- |
-| exactly `Website Control Panel` (the project's name) | **first-party**, written by the maintainers |
+| exactly `OrbDen` (the project's name) | **first-party**, written by the maintainers |
 | any other name | **third-party** |
 
 A missing `author` is invalid: `check_agents.py` fails, so an agent without an
@@ -127,7 +127,7 @@ characters, one with leading or trailing spaces, and one with control characters
 
 The checker cannot know who really wrote an agent. The maintainers verify the
 name during review: every pull request that adds an agent is read by an owner,
-and someone who writes `Website Control Panel` for their own agent is caught
+and someone who writes `OrbDen` for their own agent is caught
 there. `author` is published in `registry.json` as written, and the panel shows
 it on every agent, with a "First-party" badge for the project's name and the
 warning "Reviewed, but 3rd party" for everything else.

@@ -9,7 +9,7 @@ supports it, a sandboxed systemd timer. Agents are for work that belongs on the
 server itself: collecting metrics, watching a log, producing a daily report,
 warming a cache.
 
-An agent is not a plugin for the control panel. It cannot add screens or call
+An agent is not a plugin for OrbDen. It cannot add screens or call
 panel APIs. It runs, does its job, writes files, and exits.
 
 Everything in this repository is reviewed by an owner before it is merged and
@@ -213,7 +213,7 @@ from wcp_agent_lib import log_entry, read_json, write_json
 | `read_json(path, default=None)` | Loads JSON, returns `default` if missing or unreadable |
 | `write_json(path, data)` | Writes JSON, creating parent directories |
 | `log_entry(log_file, entry, max_lines=2000)` | Appends a JSON line and trims the file to `max_lines` |
-| `notify(notify_file, is_failure, is_success, summary_text, event_payload, username="WCP Agent")` | Sends a message to the enabled channels in `notify.conf` whose failure/success gate matches. Does nothing when the file is missing |
+| `notify(notify_file, is_failure, is_success, summary_text, event_payload, username="OrbDen Agent")` | Sends a message to the enabled channels in `notify.conf` whose failure/success gate matches. Does nothing when the file is missing |
 | `database_dump_command(...)`, `sql_digest(...)` | Backup helpers used by the backup agents |
 
 The library is shared by all agents and installing any agent rewrites the
@@ -297,7 +297,7 @@ agent has been merged and released.
 1. **You open a pull request** that adds `agents/<name>/`. Explain what the
    agent does and why it needs each path. New agents start as
    `tier = "community"`. Only owners can mark one `official`. Put
-   your own name in `author`. `Website Control Panel` is reserved for agents the
+   your own name in `author`. `OrbDen` is reserved for agents the
    maintainers wrote, and a pull request that uses it for someone else's agent is
    not merged.
 2. **CI** validates `agent.toml`, runs ShellCheck and checks that the registry
@@ -311,8 +311,10 @@ agent has been merged and released.
    repository.
 5. **An operator installs it.** The request names only
    the agent, the release tag and the script's SHA-256. The engine downloads
-   `registry.json` and the script from this repository's release (the address
-   is compiled into the engine), and installs only if:
+   `registry.json` and the script from this repository's release, served at
+   `https://agents.orbden.com` (`/releases/download/<tag>/registry.json` and
+   `/raw/<tag>/agents/<name>/<script>`; the bases can be overridden with
+   `ORBDEN_AGENTS_RELEASES_URL` and `ORBDEN_AGENTS_RAW_URL`), and installs only if:
    - the registry belongs to that release and lists the agent;
    - the agent version is not in `revoked`;
    - the engine is at least `min_engine`;

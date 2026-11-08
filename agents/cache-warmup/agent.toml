@@ -1,7 +1,7 @@
 name = "cache-warmup"
 version = "1.0.1"
 tier = "official"
-author = "Website Control Panel"
+author = "OrbDen"
 script = "agent.sh"
 schedule = "configurable"
 default_schedule = "0 4 * * *"
