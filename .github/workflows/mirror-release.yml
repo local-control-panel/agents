@@ -1,0 +1,115 @@
+name: Mirror release
+
+# Copies a published agents release to the object storage that serves
+# agents.orbden.com, at the paths the engine and the panel read:
+#   /releases/download/<tag>/registry.json
+#   /raw/<tag>/<file listed in registry.json>
+#   /releases/latest            ({"tag_name": "<tag>"}, only moves forward)
+#
+# Nothing is published until the repository variable ORBDEN_MIRROR_ENABLED is
+# "true" AND the `mirror` environment (which should require a reviewer) is
+# approved. The storage credentials are secrets of that environment.
+#
+# Variables:  ORBDEN_MIRROR_ENABLED, ORBDEN_MIRROR_BUCKET
+# Secrets (environment `mirror`): ORBDEN_MIRROR_ACCOUNT_ID,
+#   ORBDEN_MIRROR_ACCESS_KEY_ID, ORBDEN_MIRROR_SECRET_ACCESS_KEY
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to mirror (x.y.z)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror to agents.orbden.com storage
+    if: >-
+      vars.ORBDEN_MIRROR_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: mirror
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUCKET: ${{ vars.ORBDEN_MIRROR_BUCKET }}
+      TAG_INPUT: ${{ inputs.tag }}
+    steps:
+      - name: Choose and validate the tag
+        run: |
+          set -euo pipefail
+          # The release workflow creates the tag; take the latest release
+          # unless a tag was given.
+          tag="${TAG_INPUT:-$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)}"
+          if ! printf '%s' "$tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$tag' is not x.y.z"
+            exit 1
+          fi
+          if [ -z "$BUCKET" ]; then
+            echo "::error::ORBDEN_MIRROR_BUCKET is not set"
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Download registry.json
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern registry.json --dir assets
+
+      # Every file the registry lists must exist in the tagged checkout with
+      # exactly the recorded SHA-256, and nothing outside the listed paths is
+      # uploaded.
+      - name: Stage and verify the files
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, shutil
+          registry = json.load(open("assets/registry.json"))
+          assert registry["release"] == os.environ["TAG"], "registry.json belongs to another release"
+          for agent in registry["agents"].values():
+              for path, digest in agent["files"].items():
+                  assert not path.startswith("/") and ".." not in path.split("/"), path
+                  actual = hashlib.sha256(open(path, "rb").read()).hexdigest()
+                  assert actual == digest, f"{path} differs from registry.json"
+                  target = os.path.join("stage", path)
+                  os.makedirs(os.path.dirname(target), exist_ok=True)
+                  shutil.copyfile(path, target)
+          PY
+
+      - name: Upload to the bucket
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ORBDEN_MIRROR_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ORBDEN_MIRROR_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ACCOUNT_ID: ${{ secrets.ORBDEN_MIRROR_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${ACCOUNT_ID}.r2.cloudflarestorage.com"
+          s3() { aws s3 "$@" --endpoint-url "$endpoint"; }
+          if s3 ls "s3://${BUCKET}/releases/download/${TAG}/" | grep -q .; then
+            echo "::error::release ${TAG} is already mirrored; releases are immutable"
+            exit 1
+          fi
+          s3 cp assets/registry.json "s3://${BUCKET}/releases/download/${TAG}/registry.json" \
+            --content-type application/json --cache-control "public, max-age=31536000, immutable"
+          s3 cp stage "s3://${BUCKET}/raw/${TAG}/" --recursive \
+            --content-type text/plain --cache-control "public, max-age=31536000, immutable"
+          # `latest` moves forward only.
+          current="$(s3 cp "s3://${BUCKET}/releases/latest" - 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])' || true)"
+          newest="$(printf '%s\n%s\n' "${current:-0.0.0}" "$TAG" | sort -V | tail -1)"
+          if [ "$newest" = "$TAG" ]; then
+            printf '{"tag_name":"%s"}\n' "$TAG" | s3 cp - "s3://${BUCKET}/releases/latest" \
+              --content-type application/json --cache-control "public, max-age=300"
+          fi
