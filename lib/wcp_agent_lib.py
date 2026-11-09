@@ -68,7 +68,7 @@ def _sh_esc(s):
     return "'" + str(s).replace("'", "'\\''") + "'"
 
 
-def notify(notify_file, is_failure, is_success, summary_text, event_payload, username="WCP Agent"):
+def notify(notify_file, is_failure, is_success, summary_text, event_payload, username="OrbDen Agent"):
     """Send `summary_text`/`event_payload` to every enabled channel in
     `notify_file` whose on_failure/on_success gate matches. `is_failure` and
     `is_success` are independent (not assumed complementary) so callers whose

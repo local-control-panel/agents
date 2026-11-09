@@ -162,7 +162,7 @@ def ban_ip(ip, jail, banmin, hits):
         is_success=False,
         summary_text=f"Banned {ip} ({jail} jail, {hits} hits)",
         event_payload={"event": "bruteforce_ban", "ts": now, "ip": ip, "jail": jail, "hits": hits},
-        username="WCP Bruteforce Guard",
+        username="OrbDen Bruteforce Guard",
     )
 
 

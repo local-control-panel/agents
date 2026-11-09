@@ -66,7 +66,7 @@ def emit(metric, value, threshold, mount=None):
         is_success=False,
         summary_text=summary,
         event_payload={"event": "resource_alert", **entry},
-        username="WCP Resource Alert",
+        username="OrbDen Resource Alert",
     )
 
 

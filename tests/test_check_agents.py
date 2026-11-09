@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import check_agents  # noqa: E402
 
-FIRST_PARTY = "Website Control Panel"
+FIRST_PARTY = "OrbDen"
 
 
 LOCK = 'exec 9>"$WCP_DIR/agents/demo.lock"\nflock -n 9 || exit 0\n'

@@ -283,7 +283,7 @@ _notify(
         "summary":   {"total": total, "succeeded": succeeded, "failed": failed},
         "jobs":      job_results,
     },
-    username="WCP Backups",
+    username="OrbDen Backups",
 )
 
 print(f"Backup done: {succeeded} succeeded, {failed} failed")

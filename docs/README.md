@@ -1,6 +1,6 @@
 # Writing agents
 
-An *agent* is a small, reviewed script that the Website Control Panel's
+An *agent* is a small, reviewed script that OrbDen's
 operations engine installs on a managed server and runs on a schedule as root.
 These pages explain how to write one and how it gets from a pull request onto a
 server.

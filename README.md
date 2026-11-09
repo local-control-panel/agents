@@ -1,6 +1,6 @@
-# Agents for the Website Control Panel
+# Agents for OrbDen
 
-Reviewed scripts that the Website Control Panel's operations engine installs on
+Reviewed scripts that OrbDen's operations engine installs on
 managed servers and runs from root cron. This repository is open so that people
 can write agents; it is **not** a place to drop arbitrary code. Everything here
 runs as root, so every change is reviewed by an owner.
@@ -19,12 +19,15 @@ docs repository, `operations-engine/design/agent-registry.md`).
 - A release tag is plain semver (`1.0.0`) for the whole repository.
 - On release, a workflow computes the SHA-256 of every file of every agent
   directly from the tagged commit and publishes `registry.json`.
-- The engine downloads from this repository only (the address is compiled into
-  it), checks every file against `registry.json`, and installs through its
-  existing atomic pipeline.
+- The engine downloads from this repository's releases only, served at
+  `https://agents.orbden.com` (the default; `ORBDEN_AGENTS_RELEASES_URL` and
+  `ORBDEN_AGENTS_RAW_URL` override the two bases), checks every file against
+  `registry.json`, and installs through its existing atomic pipeline. The host
+  serves `/releases/download/<tag>/registry.json` and
+  `/raw/<tag>/agents/<name>/<script>`.
 - A `community` agent additionally needs an operator to approve its exact hash.
 - Every agent names its `author` in `agent.toml`. If the author is the project's own
-  name, `Website Control Panel`, the agent is first-party; any other name is
+  name, `OrbDen`, the agent is first-party; any other name is
   third-party. The maintainers check the name in the pull request that adds the
   agent. The panel shows the author on every agent, a "First-party" badge for the
   project's own, and the warning "Reviewed, but 3rd party" for all others.

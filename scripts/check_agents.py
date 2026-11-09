@@ -15,7 +15,7 @@ TIERS = {"official", "community", "example"}
 # is third-party. The engine and the panel hold the same constant. The checker
 # cannot tell who really wrote an agent: the maintainers verify the name when
 # they review the pull request that adds it.
-FIRST_PARTY_AUTHORS = {"Website Control Panel"}
+FIRST_PARTY_AUTHORS = {"OrbDen"}
 AUTHOR_MAX = 100
 SCHEDULES = {"fixed", "configurable", "none"}
 ISOLATIONS = {"cron", "systemd"}
