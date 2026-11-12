@@ -30,7 +30,7 @@ def main(tag: str, commit: str) -> int:
             for p in sorted(directory.rglob("*"))
             if p.is_file()
         }
-        agents[meta["name"]] = {
+        entry = {
             "version": meta["version"],
             "tier": meta["tier"],
             "author": meta["author"],
@@ -48,6 +48,11 @@ def main(tag: str, commit: str) -> int:
             "paths": meta["paths"],
             "files": files,
         }
+        # Only a declared list is published: an agent that does not say what
+        # it contacts is unknown, not "no network".
+        if "network" in meta:
+            entry["network"] = meta["network"]
+        agents[meta["name"]] = entry
     revoked_file = ROOT / "revoked.json"
     revoked = json.loads(revoked_file.read_text()) if revoked_file.is_file() else []
     for entry in revoked:

@@ -37,6 +37,8 @@ KNOWN_HELPERS = IMPLIED_HELPERS | {"result", "config", "site", "tool", "version"
 REQUIRES_MAX = 32
 CONFIG_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 CONFIG_KEYS_MAX = 64
+NETWORK_HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+NETWORK_MAX = 32
 HELPER_CALL = re.compile(
     r"(?:\$OPS\b|\$\{OPS\b|ops-engine|OPS_ENGINE)[^\n]*?\bagent\s+(result|config|site|tool|version)\b"
     r"|[\"']agent[\"'],\s*[\"'](result|config|site|tool|version)[\"']"
@@ -141,6 +143,14 @@ def check_requires(name: str, meta: dict) -> list[str]:
     ):
         errors.append(f"{name}: config_keys must be a list of at most {CONFIG_KEYS_MAX} distinct names "
                       "(letters, digits, '_', not starting with a digit)")
+    hosts = meta.get("network")
+    if hosts is not None and (
+        not isinstance(hosts, list) or len(hosts) > NETWORK_MAX
+        or not all(isinstance(h, str) and NETWORK_HOST.match(h) for h in hosts)
+        or len(set(hosts)) != len(hosts)
+    ):
+        errors.append(f"{name}: network must be a list of at most {NETWORK_MAX} distinct host names "
+                      "(no scheme, port or path)")
     return errors
 
 
