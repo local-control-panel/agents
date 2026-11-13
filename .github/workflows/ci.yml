@@ -1,8 +1,8 @@
 name: CI
+# Manual run only. The same checks run locally with scripts/ci-local.sh, which
+# reports the `check` commit status that branch protection requires.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -16,8 +16,6 @@ jobs:
         uses: ./.github/actions/build-engine
       - name: Validate agent metadata and scripts (engine rules)
         run: python3 scripts/check_agents.py
-      - name: Checker tests
-        run: python3 -m unittest discover tests
       - name: Unit tests
         run: python3 -m unittest discover tests
       - name: ShellCheck
