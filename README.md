@@ -41,7 +41,7 @@ agents/<name>/agent.toml        metadata (see below)
 agents/<name>/agent.sh|.py      the script
 lib/wcp_agent_lib.py            shared library; agents that need it embed a copy (see below)
 scripts/build_registry.py       generates registry.json (release workflow only)
-scripts/check_agents.py         validates metadata and library imports (runs in CI)
+scripts/check_agents.py         validates every agent with `ops-engine agent validate` (runs in CI)
 scripts/wcp_agent.py            developer CLI: new, check, run, list, show, api (docs/agent-api.md)
 tests/                          tests for the checker
 revoked.json                    [{"name": "...", "version": "x.y.z"}] versions the engine refuses

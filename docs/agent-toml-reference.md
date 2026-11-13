@@ -1,8 +1,18 @@
 # `agent.toml` reference
 
-Every agent has an `agent.toml` next to its script. `scripts/check_agents.py`
-validates it in CI and again in the release workflow, and the engine checks the
-published values again before installing.
+Every agent has an `agent.toml` next to its script. The rules for it and for the
+script live in the operations engine (`ops-engine agent validate`).
+`scripts/check_agents.py` parses the TOML, asks the engine and prints its
+answer, in CI and again in the release workflow, so the checker and the
+installer share one definition (the installer also checks the published values
+again before installing). The checker needs an engine binary (`--engine PATH` or
+`OPS_ENGINE`); without one it fails instead of guessing.
+
+Where this reference says the checker fails, the engine reports a typed problem
+(`missing_key`, `invalid_version`, `undeclared_helper`, ...; the list is in the
+engine's `docs/agent-helpers.md`). One rule is stricter than the installer:
+`default_schedule` must not be `@midnight` or `@annually`; use `@daily` or
+`@yearly`.
 
 ```toml
 name = "disk-usage-report"

@@ -274,8 +274,9 @@ check that the exit code and the heartbeat both say so.
 Then run the same checks CI runs:
 
 ```bash
-python3 scripts/check_agents.py          # validates agent.toml and the script header
-python3 -m unittest discover tests       # tests for the checker
+export OPS_ENGINE=/path/to/ops-engine    # built from operations-engine; or pass --engine
+python3 scripts/check_agents.py          # asks the engine to validate agent.toml and the script
+python3 -m unittest discover tests       # tests for the checker (engine tests skip without OPS_ENGINE)
 shellcheck agents/my-agent/agent.sh      # needs shellcheck installed
 python3 scripts/build_registry.py dev "$(git rev-parse HEAD)" && python3 -m json.tool registry.json >/dev/null
 rm registry.json                         # generated, never committed

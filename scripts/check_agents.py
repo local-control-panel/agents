@@ -1,192 +1,95 @@
 #!/usr/bin/env python3
-"""Validate every agents/*/agent.toml. Exit 1 on the first problem list."""
+"""Validate every agents/*/agent.toml and its script. Exit 1 when any is invalid.
+
+The rules live in the operations engine (`ops-engine agent validate`), the same
+code that decides what the engine installs, so this checker and an installing
+server never disagree. This file parses the TOML, calls the engine and prints
+what it says. Without an engine binary it fails (exit 2); it never falls back
+to rules of its own.
+
+usage: check_agents.py [--engine PATH] [NAME ...]
+The engine is taken from --engine, then $OPS_ENGINE, then `ops-engine` on PATH.
+"""
+import argparse
 import ast
+import json
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
-CRON = re.compile(r"^(@(hourly|daily|weekly|monthly|yearly)|([^\s]+\s+){4}[^\s]+)$")
-TIERS = {"official", "community", "example"}
-# An agent whose author is exactly this name is first-party. Any other author
-# is third-party. The engine and the panel hold the same constant. The checker
-# cannot tell who really wrote an agent: the maintainers verify the name when
-# they review the pull request that adds it.
-FIRST_PARTY_AUTHORS = {"OrbDen"}
-AUTHOR_MAX = 100
-SCHEDULES = {"fixed", "configurable", "none"}
-ISOLATIONS = {"cron", "systemd"}
-# Mirrors the engine's agent_systemd::valid_writable_path: a path strictly below
-# one of these directories, made of plain components.
-SAFE_PATH = re.compile(r"^/(root/\.wcp|var/log|var/www|var/lib/wcp-agent)(/[A-Za-z0-9._-]+)+$")
-# The library is installed as a file next to the scripts; a script reaches it
-# through this path entry, never through an inlined copy.
-LIB_PATH = re.compile(r"^sys\.path\.insert\(0, .*agents.*\)$", re.M)
 LIB_FILE = ROOT / "lib" / "wcp_agent_lib.py"
-# `requires_*` (docs/agent-api.md section 8). The engine checks them at install.
-# The tool and helper lists mirror what the engine knows; an unknown name could
-# never be satisfied, so it is an error here instead of a refusal on a server.
-REQUIRES_OP = re.compile(r"^[A-Za-z0-9.]{1,64}$")
-KNOWN_TOOLS = {"wp-cli", "rclone", "docker"}
-# The first three are implied by `min_engine`; the others must be listed.
-IMPLIED_HELPERS = {"heartbeat", "lock", "log"}
-KNOWN_HELPERS = IMPLIED_HELPERS | {"result", "config", "site", "tool", "version"}
-REQUIRES_MAX = 32
-CONFIG_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
-CONFIG_KEYS_MAX = 64
-NETWORK_HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
-NETWORK_MAX = 32
-HELPER_CALL = re.compile(
-    r"(?:\$OPS\b|\$\{OPS\b|ops-engine|OPS_ENGINE)[^\n]*?\bagent\s+(result|config|site|tool|version)\b"
-    r"|[\"']agent[\"'],\s*[\"'](result|config|site|tool|version)[\"']"
-)
-REQUIRED = ["name", "version", "tier", "author", "script", "schedule", "default_schedule",
-            "min_engine", "description", "paths"]
+ENGINE_ENV = "OPS_ENGINE"
 
 
-def check(directory: Path) -> list[str]:
-    errors = []
-    toml_path = directory / "agent.toml"
-    if not toml_path.is_file():
-        return [f"{directory.name}: agent.toml missing"]
-    meta = tomllib.loads(toml_path.read_text())
-    for key in REQUIRED:
-        if key not in meta:
-            errors.append(f"{directory.name}: missing key {key}")
-    if errors:
-        return errors
-    author = meta.get("author")
-    if (
-        not isinstance(author, str)
-        or not author
-        or author != author.strip()
-        or len(author) > AUTHOR_MAX
-        or any(ord(c) < 32 or ord(c) == 127 for c in author)
-    ):
-        errors.append(
-            f"{directory.name}: author must be a non-empty name of at most {AUTHOR_MAX} "
-            "characters, without surrounding spaces or control characters"
+class EngineError(Exception):
+    """The engine is missing or did not give a usable answer. Nothing was
+    validated; callers must not treat this as a pass."""
+
+
+def find_engine(explicit=None):
+    """The engine binary: `explicit`, then $OPS_ENGINE, then `ops-engine` on PATH."""
+    candidate = explicit or os.environ.get(ENGINE_ENV) or shutil.which("ops-engine")
+    if candidate and os.access(candidate, os.X_OK) and Path(candidate).is_file():
+        return str(Path(candidate).resolve())
+    return None
+
+
+def need_engine(explicit=None):
+    engine = find_engine(explicit)
+    if not engine:
+        raise EngineError(
+            "no ops-engine binary found: pass --engine PATH or set OPS_ENGINE "
+            "(build one from the operations-engine repository, see CONTRIBUTING.md)"
         )
-    if meta["name"] != directory.name or not NAME.match(meta["name"]):
-        errors.append(f"{directory.name}: name must equal the directory and match a-z0-9-")
-    for key in ("version", "min_engine"):
-        if not SEMVER.match(meta[key]):
-            errors.append(f"{directory.name}: {key} must be x.y.z")
-    if meta["tier"] not in TIERS:
-        errors.append(f"{directory.name}: tier must be one of {sorted(TIERS)}")
-    if meta["schedule"] not in SCHEDULES:
-        errors.append(f"{directory.name}: schedule must be one of {sorted(SCHEDULES)}")
-    elif meta["schedule"] == "none":
-        if meta["default_schedule"]:
-            errors.append(f"{directory.name}: default_schedule must be empty when schedule = none")
-    elif not CRON.match(meta["default_schedule"]):
-        errors.append(f"{directory.name}: default_schedule is not a cron expression")
-    script = directory / meta["script"]
-    if not script.is_file() or script.parent != directory:
-        errors.append(f"{directory.name}: script {meta['script']} not found in the directory")
-    if not isinstance(meta["paths"], list) or not all(
-        isinstance(p, str) and p.startswith("/") for p in meta["paths"]
-    ):
-        errors.append(f"{directory.name}: paths must be a list of absolute paths")
-    elif any(".." in p.split("/") for p in meta["paths"]):
-        errors.append(f"{directory.name}: paths must not contain ..")
-    isolation = meta.get("isolation", "cron")
-    writable = meta.get("writable_paths")
-    if isolation not in ISOLATIONS:
-        errors.append(f"{directory.name}: isolation must be one of {sorted(ISOLATIONS)}")
-    elif isolation == "cron" and writable is not None:
-        errors.append(f"{directory.name}: writable_paths only applies to isolation = systemd")
-    elif isolation == "systemd" and (
-        not isinstance(writable, list)
-        or not all(isinstance(p, str) and SAFE_PATH.fullmatch(p) and "." not in p.split("/") and ".." not in p.split("/") for p in writable)
-    ):
-        # The engine writes these into a unit file: absolute, no spaces or quotes.
-        errors.append(
-            f"{directory.name}: a systemd agent needs writable_paths, a list of absolute "
-            "paths below /root/.wcp, /var/log, /var/www or /var/lib/wcp-agent, using only A-Za-z0-9._-"
+    return engine
+
+
+def ask_engine(directory: Path, meta: dict, engine: str) -> dict:
+    """The engine's `agent.validate` result for one agent: valid, agent,
+    problems, warnings."""
+    with tempfile.TemporaryDirectory() as scratch:
+        manifest = Path(scratch) / "manifest.json"
+        manifest.write_text(json.dumps(meta))
+        try:
+            done = subprocess.run(
+                [engine, "agent", "validate", "--directory", str(directory),
+                 "--manifest-file", str(manifest)],
+                capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise EngineError(f"{directory.name}: cannot run the engine: {error}") from None
+    try:
+        answer = json.loads(done.stdout)
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict) or answer.get("operation") != "agent.validate":
+        raise EngineError(
+            f"{directory.name}: this engine does not answer 'agent validate' "
+            f"(exit {done.returncode}); use a newer engine"
         )
-    errors += check_requires(directory.name, meta)
-    if script.is_file():
-        errors += check_script(directory.name, meta, script.read_text())
-    return errors
+    if not answer.get("ok"):
+        message = (answer.get("error") or {}).get("message", "unknown reason")
+        raise EngineError(f"{directory.name}: the engine could not validate it: {message}")
+    result = answer.get("result")
+    if (not isinstance(result, dict) or not isinstance(result.get("valid"), bool)
+            or not isinstance(result.get("problems"), list)
+            or not isinstance(result.get("warnings"), list)):
+        raise EngineError(f"{directory.name}: the engine's answer has an unexpected shape")
+    if result["valid"] != (not result["problems"]):
+        raise EngineError(f"{directory.name}: the engine's answer contradicts itself")
+    return result
 
 
-def check_requires(name: str, meta: dict) -> list[str]:
+def library_errors(name: str, text: str) -> list[str]:
+    """Names imported from wcp_agent_lib must exist in this repository's
+    lib/wcp_agent_lib.py. The engine cannot see that file, so it is checked here."""
     errors = []
-    rules = {
-        "requires_ops": lambda v: bool(REQUIRES_OP.match(v)),
-        "requires_helpers": lambda v: v in KNOWN_HELPERS,
-        "requires_tools": lambda v: v in KNOWN_TOOLS,
-    }
-    expected = {
-        "requires_ops": "engine operation names such as site.list",
-        "requires_helpers": f"helper groups from {sorted(KNOWN_HELPERS)}",
-        "requires_tools": f"tools from {sorted(KNOWN_TOOLS)}",
-    }
-    for key, valid in rules.items():
-        if key not in meta:
-            continue
-        value = meta[key]
-        if (not isinstance(value, list) or len(value) > REQUIRES_MAX
-                or not all(isinstance(v, str) and valid(v) for v in value)
-                or len(set(value)) != len(value)):
-            errors.append(f"{name}: {key} must be a list of at most {REQUIRES_MAX} distinct "
-                          f"{expected[key]}")
-    keys = meta.get("config_keys")
-    if keys is not None and (
-        not isinstance(keys, list) or len(keys) > CONFIG_KEYS_MAX
-        or not all(isinstance(k, str) and CONFIG_KEY.match(k) for k in keys)
-        or len(set(keys)) != len(keys)
-    ):
-        errors.append(f"{name}: config_keys must be a list of at most {CONFIG_KEYS_MAX} distinct names "
-                      "(letters, digits, '_', not starting with a digit)")
-    hosts = meta.get("network")
-    if hosts is not None and (
-        not isinstance(hosts, list) or len(hosts) > NETWORK_MAX
-        or not all(isinstance(h, str) and NETWORK_HOST.match(h) for h in hosts)
-        or len(set(hosts)) != len(hosts)
-    ):
-        errors.append(f"{name}: network must be a list of at most {NETWORK_MAX} distinct host names "
-                      "(no scheme, port or path)")
-    return errors
-
-
-def used_helpers(text: str) -> set[str]:
-    """The `ops-engine agent <group>` groups beyond the implied three that the
-    script calls."""
-    return {a or b for a, b in HELPER_CALL.findall(text)}
-
-
-def check_script(name: str, meta: dict, text: str) -> list[str]:
-    """The script header must agree with agent.toml, and the shared library is
-    imported from the installed file, never embedded in the script."""
-    errors = []
-    header = re.search(r"^# wcp-agent-version: (\S+)$", text, re.M)
-    if not header or header.group(1) != meta["version"]:
-        errors.append(f"{name}: '# wcp-agent-version' must equal version in agent.toml")
-    if "b64decode" in text:
-        errors.append(f"{name}: no base64 blobs; import wcp_agent_lib from the installed file")
-    if re.search(r"\bwcp_agent_lib\b", text) and not re.search(r"^from wcp_agent_lib import ", text, re.M):
-        errors.append(f"{name}: use 'from wcp_agent_lib import ...'")
-    if re.search(r"^from wcp_agent_lib import ", text, re.M) and not LIB_PATH.search(text):
-        errors.append(f"{name}: put the agents directory on sys.path before importing wcp_agent_lib")
-    declared = meta.get("requires_helpers", [])
-    if isinstance(declared, list):
-        for group in sorted(used_helpers(text) - set(declared)):
-            errors.append(f"{name}: the script calls 'agent {group}' but requires_helpers does not "
-                          f"list \"{group}\" (the engine checks it at install)")
-    header_name = re.search(r"^# wcp-agent: (\S+)$", text, re.M)
-    if not header_name or header_name.group(1) != meta["name"]:
-        errors.append(f"{name}: '# wcp-agent' must equal name in agent.toml")
-    # Contract rule 4: a second start while one runs must do nothing. Both the
-    # plain form (`flock -n 9`), the engine helper (`ops-engine agent lock`) and
-    # a non-blocking `fcntl.flock` in Python (the backup agents) all count. Every
-    # published agent has one, so it is an error.
-    if not re.search(r"^\s*flock -n \d+|\bagent\s+lock\b|\bfcntl\.flock\(.*LOCK_NB", text, re.M):
-        errors.append(f"{name}: no lock taken with 'flock -n' or 'ops-engine agent lock' (contract rule 4)")
     known = library_names()
     for imported in re.findall(r"^from wcp_agent_lib import (.+)$", text, re.M):
         for item in imported.split("#")[0].replace("(", "").replace(")", "").split(","):
@@ -196,15 +99,31 @@ def check_script(name: str, meta: dict, text: str) -> list[str]:
     return errors
 
 
-def advise(name: str, text: str) -> list[str]:
-    """Contract points that are not (yet) errors, because some agents already
-    published do not meet them. New agents should."""
-    notes = []
-    # Both the plain form (trap) and the engine helper (`ops-engine agent
-    # heartbeat`, docs/agent-api.md) satisfy the contract.
-    if "heartbeat" not in text:
-        notes.append(f"{name}: no heartbeat written on exit (contract rule 3)")
-    return notes
+def check_full(directory: Path, engine: str) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for one agent directory, as printable lines."""
+    name = directory.name
+    toml_path = directory / "agent.toml"
+    if not toml_path.is_file():
+        return [f"{name}: agent.toml missing"], []
+    try:
+        meta = tomllib.loads(toml_path.read_text())
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+        return [f"{name}: agent.toml is not valid TOML: {error}"], []
+    result = ask_engine(directory, meta, engine)
+    errors = [f"{name}: {p.get('message', p.get('code'))}" for p in result["problems"]]
+    warnings = [f"{name}: {w.get('message', w.get('code'))}" for w in result["warnings"]]
+    script = meta.get("script")
+    if isinstance(script, str) and (directory / script).is_file() and "/" not in script:
+        errors += library_errors(name, (directory / script).read_text())
+    return errors, warnings
+
+
+def check(directory: Path, engine: str = None) -> list[str]:
+    return check_full(directory, need_engine(engine))[0]
+
+
+def advise(directory: Path, engine: str = None) -> list[str]:
+    return check_full(directory, need_engine(engine))[1]
 
 
 def library_names() -> set[str]:
@@ -222,19 +141,33 @@ def library_names() -> set[str]:
     return {n for n in names if not n.startswith("_")}
 
 
-def main() -> int:
-    errors = []
-    for directory in sorted((ROOT / "agents").iterdir()):
-        if directory.is_dir():
-            errors += check(directory)
-    for directory in sorted((ROOT / "agents").iterdir()):
-        script = directory / "agent.sh"
-        if directory.is_dir() and script.is_file():
-            for note in advise(directory.name, script.read_text()):
-                print(f"warning: {note}", file=sys.stderr)
+def check_all(directories, engine: str = None) -> int:
+    """Prints errors to stderr and warnings as 'warning: ...'; the exit code."""
+    try:
+        binary = need_engine(engine)
+        errors, warnings = [], []
+        for directory in directories:
+            found = check_full(directory, binary)
+            errors += found[0]
+            warnings += found[1]
+    except EngineError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    for warning in warnings:
+        print(f"warning: {warning}", file=sys.stderr)
     for error in errors:
         print(error, file=sys.stderr)
     return 1 if errors else 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--engine", help="the ops-engine binary (default: $OPS_ENGINE, then PATH)")
+    parser.add_argument("names", nargs="*", help="agents to check (default: all)")
+    args = parser.parse_args(argv)
+    base = ROOT / "agents"
+    directories = [base / n for n in args.names] or [d for d in sorted(base.iterdir()) if d.is_dir()]
+    return check_all(directories, args.engine)
 
 
 if __name__ == "__main__":

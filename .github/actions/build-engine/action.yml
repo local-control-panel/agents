@@ -1,0 +1,23 @@
+name: Build the pinned ops-engine
+description: >
+  Builds the operations engine from a fixed commit of its public repository and
+  exports OPS_ENGINE for the steps that follow. The engine holds the rules that
+  scripts/check_agents.py applies, so the commit below is the version of those
+  rules this repository is checked against. It needs no token or key: the
+  repository is public and the build is from source.
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: orbden/operations-engine
+        # Raise this when a change here needs a newer engine; see CONTRIBUTING.md.
+        ref: 24aa00eb43fa27e719d00bf387bfaeb00dcc9b03
+        path: .engine-src
+        persist-credentials: false
+    - name: Build ops-engine
+      shell: bash
+      run: |
+        cd .engine-src
+        cargo build --release --locked
+        echo "OPS_ENGINE=$GITHUB_WORKSPACE/.engine-src/target/release/ops-engine" >> "$GITHUB_ENV"

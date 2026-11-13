@@ -3,6 +3,15 @@
 0. Read [docs/writing-agents.md](docs/writing-agents.md).
 1. Run `python3 scripts/wcp_agent.py new <your-name> --author "Your Name"` (or copy `agents/example`) and edit `agent.toml`.
 2. Try it with `python3 scripts/wcp_agent.py run <your-name> --dry-run`, then run `python3 scripts/check_agents.py` and `shellcheck` on your script.
+   The checker calls the operations engine (`ops-engine agent validate`), which holds the
+   validation rules, so it needs an engine binary: build one from
+   [operations-engine](https://github.com/orbden/operations-engine) with `cargo build --release`
+   and pass it with `--engine PATH` or `OPS_ENGINE=PATH`. CI builds the commit named in
+   `.github/actions/build-engine/action.yml`; raise that pin in the same pull request when a
+   change needs a newer engine.
+   `scripts/ci-local.sh` runs every check of the CI workflow on your machine (it builds that
+   pinned engine into a cache directory) and reports the `check` commit status on your pushed
+   commit; the hosted workflow is a manual run.
 3. Open a pull request. Explain what the agent does and why it needs each path.
 4. Expect careful review: the script runs as root on other people's servers.
    Small, readable scripts are reviewed faster.
