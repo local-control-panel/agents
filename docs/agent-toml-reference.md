@@ -97,6 +97,16 @@ the operator's values reach the agent through `agent.configure`.
 config_keys = ["WEBHOOK_URL"]
 ```
 
+`network` lists the host names the agent contacts (no scheme, port or path, at
+most 32, distinct). The engine does not check it; it is published as `network`
+in `registry.json` so a panel can show it next to the agent. An agent that
+does not declare `network` has no `network` entry in the registry, which means
+"not stated", not "no network"; `network = []` states that it contacts nothing.
+
+```toml
+network = ["hooks.slack.com"]
+```
+
 An engine older than the one that checks these fields ignores them, so set
 `min_engine` to the release that does.
 

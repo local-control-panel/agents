@@ -500,6 +500,14 @@ class Requirements(unittest.TestCase):
             errors = check_agents.check_requires("demo", dict(self.META, config_keys=bad))
             self.assertEqual(len(errors), 1, bad)
 
+    def test_network_hosts_are_validated(self):
+        for ok in ([], ["hooks.slack.com", "api.example.org"]):
+            self.assertEqual(check_agents.check_requires("demo", dict(self.META, network=ok)), [])
+        for bad in ("hooks.slack.com", ["https://hooks.slack.com"], ["a.com:443"], ["a.com/x"],
+                    ["a.com", "a.com"], [1], [f"h{i}.example.org" for i in range(33)]):
+            errors = check_agents.check_requires("demo", dict(self.META, network=bad))
+            self.assertEqual(len(errors), 1, bad)
+
     def test_a_helper_used_but_not_declared_is_an_error(self):
         text = ('# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n"$OPS" agent result emit "$NAME" --status ok '
                 '--summary x\nsubprocess.run([ops, "agent", "tool", "status", "rclone"])\n')
@@ -535,6 +543,26 @@ class Requirements(unittest.TestCase):
         entry = registry["agents"]["demo-bash"]
         self.assertEqual((entry["requiresHelpers"], entry["requiresTools"], entry["requiresOps"]),
                          (["result"], ["rclone"], ["site.list"]))
+        # Not declared is not published (unknown, not "no network").
+        self.assertNotIn("network", entry)
+
+    def test_registry_carries_a_declared_network_list(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        (root / "agents").mkdir()
+        with mock.patch.object(wcp_agent, "ROOT", root), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(wcp_agent.main(["new", "demo-net", "--lang", "bash"]), 0)
+        import build_registry
+        toml = root / "agents" / "demo-net" / "agent.toml"
+        with mock.patch.object(build_registry, "ROOT", root):
+            toml.write_text(toml.read_text().replace('tier = "community"', 'tier = "official"')
+                            + 'network = ["hooks.slack.com"]\n')
+            self.assertEqual(build_registry.main("1.0.0", "abc"), 0)
+            self.assertEqual(json.loads((root / "registry.json").read_text())["agents"]["demo-net"]["network"],
+                             ["hooks.slack.com"])
+            toml.write_text(toml.read_text().replace('["hooks.slack.com"]', '[]'))
+            self.assertEqual(build_registry.main("1.0.0", "abc"), 0)
+            self.assertEqual(json.loads((root / "registry.json").read_text())["agents"]["demo-net"]["network"], [])
 
 
 class ImportCheck(unittest.TestCase):
