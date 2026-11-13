@@ -114,7 +114,9 @@ An engine older than the one that checks these fields ignores them, so set
 
 On release, `registry.json` records, per agent: `version`, `tier`, `author`, `schedule`,
 `defaultSchedule`, `minEngine`, `requiresOps`, `requiresHelpers`, `requiresTools`, `configKeys`,
-`script`, `description`, `paths`, the isolation settings when present, and the SHA-256 of every file in the agent's directory.
+`script`, `description`, `paths`, the isolation settings when present, `network` when the agent declares it, and the SHA-256 of every file in the agent's directory.
+An agent that declares no `network` has no `network` key in its registry entry (not stated);
+`network = []` is published as an empty list (declares no network access).
 It also records the release tag, the commit and the list of revoked
 `{name, version}` pairs. These come straight from the tagged commit and are
 never typed by hand.
