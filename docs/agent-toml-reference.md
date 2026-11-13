@@ -107,14 +107,18 @@ does not declare `network` has no `network` entry in the registry, which means
 network = ["hooks.slack.com"]
 ```
 
-An engine older than the one that checks these fields ignores them, so set
-`min_engine` to the release that does.
+An engine older than the one that checks `requires_ops`, `requires_helpers` and
+`requires_tools` ignores them, so set `min_engine` to the release that does.
+`config_keys` and `network` are only published, never checked, so `min_engine`
+does not need to account for them.
 
 ## What the published registry contains
 
 On release, `registry.json` records, per agent: `version`, `tier`, `author`, `schedule`,
 `defaultSchedule`, `minEngine`, `requiresOps`, `requiresHelpers`, `requiresTools`, `configKeys`,
-`script`, `description`, `paths`, the isolation settings when present, and the SHA-256 of every file in the agent's directory.
+`script`, `description`, `paths`, `isolation` and `writablePaths`, and the SHA-256 of every file in the agent's directory.
+`isolation` is always written (`cron` when the manifest does not set it) and `writablePaths`
+is an empty list unless the agent sets `writable_paths`.
 It also records the release tag, the commit and the list of revoked
 `{name, version}` pairs. These come straight from the tagged commit and are
 never typed by hand.
