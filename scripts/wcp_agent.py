@@ -3,7 +3,8 @@
 
   wcp_agent.py new NAME [--lang bash|python] [--author NAME] [--description TEXT]
                         [--schedule CRON]   scaffold agents/NAME
-  wcp_agent.py check [NAME ...]             validate agent.toml and the script
+  wcp_agent.py check [NAME ...] [--engine PATH]
+                                            validate agent.toml and the script with the engine
   wcp_agent.py run NAME [--dry-run] [--json] [--engine PATH] [--config KEY=VALUE ...]
                                             run it against a scratch WCP_DIR
   wcp_agent.py list                         the agents in this repository
@@ -30,6 +31,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import check_agents  # noqa: E402
 
 LIB = ROOT / "lib" / "wcp_agent_lib.py"
+NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 NAME_MAX = 64
 # The first engine release that has `ops-engine agent heartbeat|lock|log`.
 # Scaffolds that call them must not run on an older engine. Set this to the
@@ -552,14 +554,13 @@ def toml_string(value: str) -> str:
 
 def cmd_new(args) -> int:
     name = args.name
-    if not check_agents.NAME.match(name) or len(name) > NAME_MAX:
+    # A directory name that is safe to create; the engine judges the rest below.
+    if not NAME.match(name) or len(name) > NAME_MAX:
         return fail(f"name must match a-z0-9- and be at most {NAME_MAX} characters")
     target = ROOT / "agents" / name
     if target.exists():
         return fail(f"agents/{name} already exists")
     schedule = args.schedule or ""
-    if schedule and not check_agents.CRON.match(schedule):
-        return fail("schedule must be five cron fields or @daily and the like")
     try:
         author = toml_string(args.author)
         description = toml_string(args.description or f"TODO: describe what {name} does, in one sentence.")
@@ -574,7 +575,11 @@ def cmd_new(args) -> int:
     (target / "agent.toml").write_text(TOML.format(**values))
     (target / "agent.sh").write_text((PYTHON if args.lang == "python" else BASH).format(**values))
     (target / "agent.sh").chmod(0o755)
-    errors = check_agents.check(target)
+    try:
+        errors = check_agents.check(target, getattr(args, "engine", None))
+    except check_agents.EngineError as error:
+        shutil.rmtree(target)
+        return fail(str(error))
     if errors:
         shutil.rmtree(target)
         return fail("; ".join(errors))
@@ -592,14 +597,8 @@ def agent_dirs(names):
 
 
 def cmd_check(args) -> int:
-    errors = []
-    for directory in agent_dirs(args.names):
-        errors += check_agents.check(directory)
-    for error in errors:
-        print(error, file=sys.stderr)
-    if not errors:
-        print("ok")
-    return 1 if errors else 0
+    """The rules are the engine's (`ops-engine agent validate`); see check_agents."""
+    return check_agents.check_all(agent_dirs(args.names), args.engine)
 
 
 def cmd_list(_args) -> int:
@@ -635,7 +634,10 @@ def run_agent(name: str, dry_run: bool = False, timeout: int = 60, engine: str =
     `agents/<name>.conf`, as `ops-engine agent configure` would. Returns a
     report dict."""
     directory = ROOT / "agents" / name
-    errors = check_agents.check(directory)
+    try:
+        errors = check_agents.check(directory, engine)
+    except check_agents.EngineError as error:
+        return {"agent": name, "ok": False, "problems": [str(error)]}
     if errors:
         return {"agent": name, "ok": False, "problems": errors}
     meta = tomllib.loads((directory / "agent.toml").read_text())
@@ -784,9 +786,13 @@ def main(argv=None) -> int:
     new.add_argument("--author", default="Your Name")
     new.add_argument("--description")
     new.add_argument("--schedule", help="five cron fields; without it the agent has no schedule")
+    new.add_argument("--engine", help="the ops-engine binary that validates the scaffold "
+                     "(default: $OPS_ENGINE, then PATH)")
     new.set_defaults(func=cmd_new)
     check = sub.add_parser("check", help="validate agents")
     check.add_argument("names", nargs="*")
+    check.add_argument("--engine", help="the ops-engine binary that validates "
+                       "(default: $OPS_ENGINE, then PATH)")
     check.set_defaults(func=cmd_check)
     run = sub.add_parser("run", help="run an agent against a scratch WCP_DIR and check the contract")
     run.add_argument("name")

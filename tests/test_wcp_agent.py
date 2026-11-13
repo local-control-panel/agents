@@ -18,6 +18,9 @@ import check_agents  # noqa: E402
 import wcp_agent  # noqa: E402
 import wcp_agent_lib as lib  # noqa: E402
 
+ENGINE = check_agents.find_engine()
+needs_engine = unittest.skipUnless(ENGINE, "no ops-engine binary (set OPS_ENGINE)")
+
 
 class Scaffold(unittest.TestCase):
     def setUp(self):
@@ -33,17 +36,19 @@ class Scaffold(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return wcp_agent.main(["new", name, *extra])
 
+    @needs_engine
     def test_bash_scaffold_passes_the_checker_and_the_contract(self):
         self.assertEqual(self.new("demo-bash", "--schedule", "0 * * * *"), 0)
-        self.assertEqual(check_agents.check(self.root / "agents" / "demo-bash"), [])
+        self.assertEqual(check_agents.check(self.root / "agents" / "demo-bash", ENGINE), [])
         report = wcp_agent.run_agent("demo-bash")
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["heartbeat"]["exit_code"], 0)
         self.assertTrue(report["lock_ok"])
 
+    @needs_engine
     def test_python_scaffold_uses_the_engine_helpers_in_dry_run(self):
         self.assertEqual(self.new("demo-py", "--lang", "python"), 0)
-        self.assertEqual(check_agents.check(self.root / "agents" / "demo-py"), [])
+        self.assertEqual(check_agents.check(self.root / "agents" / "demo-py", ENGINE), [])
         report = wcp_agent.run_agent("demo-py", dry_run=True)
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["logs"], {})  # dry run writes no log line
@@ -175,11 +180,12 @@ class BuiltinLocks(unittest.TestCase):
                                  if f.is_file() and f.parent.name != "bin")
                 self.assertEqual(written, [f"agents/{name}.heartbeat", f"agents/{name}.lock"])
 
+    @needs_engine
     def test_no_agent_is_left_without_a_lock(self):
         for directory in sorted((ROOT / "agents").iterdir()):
             text = (directory / "agent.sh").read_text()
-            self.assertEqual(check_agents.check(directory), [], directory.name)
-            self.assertEqual(check_agents.advise(directory.name, text), [], directory.name)
+            self.assertEqual(check_agents.check(directory, ENGINE), [], directory.name)
+            self.assertEqual(check_agents.advise(directory, ENGINE), [], directory.name)
 
 
 class FrozenLibrary(unittest.TestCase):
@@ -476,54 +482,6 @@ class StubEngine(unittest.TestCase):
 
 
 class Requirements(unittest.TestCase):
-    META = {"version": "1.0.0", "name": "demo"}
-
-    def test_valid_requirements_pass(self):
-        meta = dict(self.META, requires_ops=["site.list", "version"], requires_helpers=["result", "tool"],
-                    requires_tools=["rclone", "docker", "wp-cli"])
-        self.assertEqual(check_agents.check_requires("demo", meta), [])
-        self.assertEqual(check_agents.check_requires("demo", self.META), [])
-
-    def test_bad_requirements_are_errors(self):
-        bad = [("requires_tools", ["jq"]), ("requires_tools", "rclone"), ("requires_tools", ["rclone", "rclone"]),
-               ("requires_helpers", ["nope"]), ("requires_ops", ["site list"]), ("requires_ops", [""]),
-               ("requires_ops", [1]), ("requires_ops", ["a"] * 2), ("requires_ops", [f"op{i}" for i in range(33)])]
-        for key, value in bad:
-            errors = check_agents.check_requires("demo", dict(self.META, **{key: value}))
-            self.assertEqual(len(errors), 1, (key, value))
-            self.assertIn(key, errors[0])
-
-    def test_config_keys_are_validated(self):
-        ok = dict(self.META, config_keys=["WEBHOOK_URL", "_x1"])
-        self.assertEqual(check_agents.check_requires("demo", ok), [])
-        for bad in ("WEBHOOK_URL", ["a-b"], ["1a"], ["A", "A"], [1], [f"K{i}" for i in range(65)]):
-            errors = check_agents.check_requires("demo", dict(self.META, config_keys=bad))
-            self.assertEqual(len(errors), 1, bad)
-
-    def test_network_hosts_are_validated(self):
-        for ok in ([], ["hooks.slack.com", "api.example.org"]):
-            self.assertEqual(check_agents.check_requires("demo", dict(self.META, network=ok)), [])
-        for bad in ("hooks.slack.com", ["https://hooks.slack.com"], ["a.com:443"], ["a.com/x"],
-                    ["a.com", "a.com"], [1], [f"h{i}.example.org" for i in range(33)]):
-            errors = check_agents.check_requires("demo", dict(self.META, network=bad))
-            self.assertEqual(len(errors), 1, bad)
-
-    def test_a_helper_used_but_not_declared_is_an_error(self):
-        text = ('# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n"$OPS" agent result emit "$NAME" --status ok '
-                '--summary x\nsubprocess.run([ops, "agent", "tool", "status", "rclone"])\n')
-        errors = check_agents.check_script("demo", self.META, text)
-        self.assertEqual(len([e for e in errors if "requires_helpers" in e]), 2, errors)
-        declared = dict(self.META, requires_helpers=["result", "tool"])
-        self.assertEqual([e for e in check_agents.check_script("demo", declared, text)
-                          if "requires_helpers" in e], [])
-
-    def test_prose_and_the_implied_helpers_need_no_declaration(self):
-        text = ('# wcp-agent: demo\n# wcp-agent-version: 1.0.0\n# see agent site list in the docs\n'
-                '"$OPS" agent log "$NAME" started\nexec "$OPS" agent lock "$NAME" -- bash "$0"\n'
-                'trap \'"$OPS" agent heartbeat "$NAME"\' EXIT\n')
-        errors = check_agents.check_script("demo", self.META, text)
-        self.assertEqual([e for e in errors if "requires_helpers" in e], [])
-
     def test_scaffolds_declare_what_they_use_and_the_registry_carries_it(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(__import__("shutil").rmtree, root, True)
@@ -563,20 +521,6 @@ class Requirements(unittest.TestCase):
             toml.write_text(toml.read_text().replace('["hooks.slack.com"]', '[]'))
             self.assertEqual(build_registry.main("1.0.0", "abc"), 0)
             self.assertEqual(json.loads((root / "registry.json").read_text())["agents"]["demo-net"]["network"], [])
-
-
-class ImportCheck(unittest.TestCase):
-    def test_unknown_library_helper_is_an_error(self):
-        meta = {"version": "1.0.0", "name": "demo"}
-        text = ("# wcp-agent: demo\n# wcp-agent-version: 1.0.0\nsys.path.insert(0, agents)\n"
-                "from wcp_agent_lib import run, no_such_helper\n")
-        errors = check_agents.check_script("demo", meta, text)
-        self.assertEqual(len([e for e in errors if "no_such_helper" in e]), 1, errors)
-
-    def test_header_name_must_match(self):
-        meta = {"version": "1.0.0", "name": "demo"}
-        errors = check_agents.check_script("demo", meta, "# wcp-agent: other\n# wcp-agent-version: 1.0.0\n")
-        self.assertTrue(any("'# wcp-agent'" in e for e in errors), errors)
 
 
 if __name__ == "__main__":
