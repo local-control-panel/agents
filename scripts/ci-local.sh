@@ -74,9 +74,12 @@ build_engine() {
 }
 
 shellcheck_agents() {
-  shopt -s globstar nullglob
-  local files=(agents/**/*.sh)
-  if [[ ${#files[@]} -gt 0 ]]; then shellcheck "${files[@]}"; fi
+  # find, not globstar: the bash that ships with macOS has no globstar.
+  local files=()
+  while IFS= read -r file; do files+=("$file"); done < <(find agents -name '*.sh' | sort)
+  if [[ ${#files[@]} -eq 0 ]]; then return 0; fi
+  echo "ci-local: ShellCheck on ${#files[@]} scripts"
+  shellcheck "${files[@]}"
 }
 
 registry_builds() {
