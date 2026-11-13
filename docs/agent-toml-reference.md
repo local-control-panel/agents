@@ -116,9 +116,11 @@ does not need to account for them.
 
 On release, `registry.json` records, per agent: `version`, `tier`, `author`, `schedule`,
 `defaultSchedule`, `minEngine`, `requiresOps`, `requiresHelpers`, `requiresTools`, `configKeys`,
-`script`, `description`, `paths`, `isolation` and `writablePaths`, and the SHA-256 of every file in the agent's directory.
+`script`, `description`, `paths`, `isolation`, `writablePaths`, `network` when the agent declares it, and the SHA-256 of every file in the agent's directory.
 `isolation` is always written (`cron` when the manifest does not set it) and `writablePaths`
-is an empty list unless the agent sets `writable_paths`.
+is an empty list unless the agent sets `writable_paths`. An agent that declares no
+`network` has no `network` key in its registry entry (not stated); `network = []`
+is published as an empty list (declares no network access).
 It also records the release tag, the commit and the list of revoked
 `{name, version}` pairs. These come straight from the tagged commit and are
 never typed by hand.
